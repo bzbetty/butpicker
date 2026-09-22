@@ -80,16 +80,22 @@ shell behave normally.
 ```sh
 npm install
 npm run tauri dev      # dev, with hot reload on the frontend
-npm run tauri build    # MSI installer under src-tauri/target/release/bundle
+npm run tauri build    # installer under src-tauri/target/release/bundle
 ```
 
-Needs the WebView2 runtime (ships with Windows 11) and Visual Studio Build Tools
-with the C++ workload.
+On Windows this needs the WebView2 runtime (ships with Windows 11) and Visual
+Studio Build Tools with the C++ workload. `rust-toolchain.toml` pins only the
+compiler version, so the host default toolchain is used; on Windows that should
+be MSVC, because `windows-gnu` dies partway through the dependency tree with
+`error calling dlltool 'dlltool.exe': program not found`, which reads like a
+missing system package rather than the wrong toolchain.
 
-`rust-toolchain.toml` pins the project to `x86_64-pc-windows-msvc`. If your
-default toolchain is `windows-gnu`, the build otherwise dies partway through the
-dependency tree with `error calling dlltool 'dlltool.exe': program not found`,
-which reads like a missing system package rather than the wrong toolchain.
+On Linux it needs the usual Tauri system libraries, e.g. on Debian/Ubuntu:
+
+```sh
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev \
+  libayatana-appindicator3-dev librsvg2-dev libssl-dev build-essential
+```
 
 ## Configuration
 
@@ -108,11 +114,15 @@ Settings live in `localStorage` under `butpicker.settings`:
 }
 ```
 
-Change `shell` to `cmd.exe` or a Git Bash path if you'd rather. `butCommand`
-resolves through `PATH`; set an absolute path if you run a non-default build.
+Those are the Windows defaults; on other platforms they default to `bash -l`,
+`but` and `~/git` instead. Change `shell` to `cmd.exe` or a Git Bash path if
+you'd rather. `butCommand` resolves through `PATH`; set an absolute path if you
+run a non-default build. A `scanRoot` starting with `~/` is expanded against the
+home directory.
 
 Open tabs are stored separately, in
-`%APPDATA%\dev.bzbetty.butpicker\session.json`.
+`%APPDATA%\dev.bzbetty.butpicker\session.json` (Windows) or
+`~/.config/dev.bzbetty.butpicker/session.json` (Linux).
 
 ## How it works
 
