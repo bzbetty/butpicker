@@ -34,12 +34,14 @@ body {
 
 /* ------------------------------------------------------------------- tabs */
 
+/* The bar sits darker than the content area so the active tab can be the
+   lightest thing in the strip. */
 .tabbar {
   display: flex;
   align-items: stretch;
   height: var(--tabbar-h);
   flex: 0 0 auto;
-  background: var(--bg-tab);
+  background: #05080c;
   border-bottom: 1px solid var(--border);
 }
 
@@ -63,23 +65,31 @@ body {
   padding: 0 8px 0 16px;
   max-width: 240px;
   border-right: 1px solid var(--border);
-  color: #c2cbd5;
+  color: #aab4bf;
   font-size: 13.5px;
   cursor: default;
   white-space: nowrap;
-  border-top: 2px solid transparent;
+  border-top: 3px solid transparent;
 }
 
 .tab:hover {
-  background: #1a2029;
-  color: var(--brightWhite, #f0f6fc);
+  background: #161d26;
+  color: #e6edf3;
 }
 
+/* Four cues at once, because one subtle one wasn't landing: a full-width accent
+   cap, an accent wash bleeding down from it, the lightest background in the
+   strip, and the only pure-white bold label. */
 .tab.active {
-  background: var(--bg);
-  color: #f0f6fc;
+  background: linear-gradient(180deg, #1f6feb3d 0%, var(--bg) 70%);
+  color: #ffffff;
   font-weight: 600;
   border-top-color: var(--accent);
+  box-shadow: inset 0 -1px 0 0 var(--bg);
+}
+
+.tab.active .tab-close {
+  color: #c9d1d9;
 }
 
 .tab.dragging {
