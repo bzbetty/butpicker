@@ -1,4 +1,6 @@
+use crate::builds::BuildConfig;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
@@ -24,10 +26,22 @@ pub struct Session {
     pub active: Option<String>,
 }
 
+/// Settings that belong to one repository rather than the app. They live here
+/// rather than in a dotfile inside the repo: these are work repos shared with
+/// other people, and a tool's preferences have no business dirtying them.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProjectSettings {
+    pub builds: BuildConfig,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Store {
     #[serde(default)]
     session: Session,
+    /// Keyed by project id, which is the repository path.
+    #[serde(default)]
+    projects: BTreeMap<String, ProjectSettings>,
 }
 
 fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -116,4 +130,42 @@ pub fn session_save(
     let mut store = load(&app)?;
     store.session = Session { open, active };
     save(&app, &store)
+}
+
+/// Every project's settings in one go: the frontend needs them for each tab it
+/// opens, and there are only ever a handful.
+#[tauri::command]
+pub fn project_settings_all(app: AppHandle) -> Result<BTreeMap<String, ProjectSettings>, String> {
+    Ok(load(&app)?.projects)
+}
+
+/// Settings that are entirely defaults are removed rather than written, so the
+/// store doesn't fill up with empty entries for every repo ever opened.
+#[tauri::command]
+pub fn project_settings_save(
+    app: AppHandle,
+    id: String,
+    settings: ProjectSettings,
+) -> Result<(), String> {
+    let mut store = load(&app)?;
+    if is_default(&settings) {
+        store.projects.remove(&id);
+    } else {
+        store.projects.insert(id, settings);
+    }
+    save(&app, &store)
+}
+
+fn is_default(settings: &ProjectSettings) -> bool {
+    let builds = &settings.builds;
+    builds.enabled.is_none()
+        && builds.definitions.is_empty()
+        && [
+            &builds.organization,
+            &builds.project,
+            &builds.repository,
+            &builds.branch,
+        ]
+        .iter()
+        .all(|value| value.as_deref().unwrap_or_default().trim().is_empty())
 }

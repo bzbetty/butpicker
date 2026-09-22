@@ -3,13 +3,21 @@ import "./styles.css";
 
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  buildStatus,
+  emptyBuildConfig,
   getSession,
   listProjects,
   matchesSubsequence,
+  projectSettingsAll,
   projectStatus,
+  saveProjectSettings,
   saveSession,
+  type BuildState,
+  type BuildStatus,
   type Project,
+  type ProjectSettings,
   type ProjectStatus,
 } from "./projects";
 import { getSettings } from "./settings";
@@ -84,6 +92,7 @@ function closeProject(id: string): void {
   view.dispose();
   views.delete(id);
   statuses.delete(id);
+  builds.delete(id);
   const index = order.indexOf(id);
   order = order.filter((x) => x !== id);
   renderTabs();
@@ -109,32 +118,50 @@ function cycleProject(direction: 1 | -1): void {
 /* ------------------------------------------------------------------ status */
 
 const statuses = new Map<string, ProjectStatus>();
+const builds = new Map<string, BuildStatus>();
 let statusTimer: number | undefined;
 
 /**
- * Polls `but status` for the open tabs. Only while the window has focus —
- * a background window spawning a process per project per interval is rude.
+ * Polls `but status` and the Azure DevOps build for the open tabs. Only while
+ * the window has focus — a background window spawning a process per project per
+ * interval is rude. The build side answers from a minute-old cache in Rust, so
+ * asking on the same six second timer costs nothing most of the time.
  */
 async function refreshStatuses(): Promise<void> {
   if (!document.hasFocus() || views.size === 0) return;
   const { butCommand, statusIgnoreBranches } = getSettings();
   const results = await Promise.all(
     [...views.values()].map(async (view) => {
-      const status = await projectStatus(view.project.path, butCommand, statusIgnoreBranches).catch(() => null);
-      return [view.project.id, status] as const;
+      const [status, build] = await Promise.all([
+        projectStatus(view.project.path, butCommand, statusIgnoreBranches).catch(() => null),
+        buildStatus(view.project.path, projectSettingsFor(view.project.id).builds).catch(() => null),
+      ]);
+      return [view.project.id, status, build] as const;
     }),
   );
   let changed = false;
-  for (const [id, status] of results) {
-    if (!status) continue;
-    const previous = statuses.get(id);
-    if (
-      previous?.pending !== status.pending ||
-      previous?.branches !== status.branches ||
-      previous?.error !== status.error
-    ) {
-      statuses.set(id, status);
-      changed = true;
+  for (const [id, status, build] of results) {
+    if (status) {
+      const previous = statuses.get(id);
+      if (
+        previous?.pending !== status.pending ||
+        previous?.branches !== status.branches ||
+        previous?.error !== status.error
+      ) {
+        statuses.set(id, status);
+        changed = true;
+      }
+    }
+    if (build) {
+      const previous = builds.get(id);
+      builds.set(id, build);
+      if (
+        previous?.state !== build.state ||
+        previous?.number !== build.number ||
+        previous?.error !== build.error
+      ) {
+        changed = true;
+      }
     }
   }
   if (changed) renderTabs();
@@ -157,22 +184,87 @@ window.addEventListener("focus", () => {
 
 let draggingId: string | null = null;
 
-/** The pending-changes and branch-count badges that sit after the tab name. */
+/** A glyph per build state; the states with no glyph get no badge at all. */
+const BUILD_GLYPH: Partial<Record<BuildState, string>> = {
+  succeeded: "✓",
+  failed: "✗",
+  partial: "!",
+  canceled: "⊘",
+  running: "●",
+  queued: "◌",
+  unknown: "?",
+  error: "?",
+};
+
+const BUILD_WORD: Partial<Record<BuildState, string>> = {
+  succeeded: "Succeeded",
+  failed: "Failed",
+  partial: "Partially succeeded",
+  canceled: "Canceled",
+  running: "Running",
+  queued: "Queued",
+  unknown: "Finished",
+};
+
+/** "4m ago" — the badge has room for a glyph, the tooltip carries the rest. */
+function ago(iso: string | null): string {
+  if (!iso) return "";
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "";
+  const minutes = (Date.now() - then) / 60_000;
+  if (minutes < 1.5) return "just now";
+  if (minutes < 90) return `${Math.round(minutes)}m ago`;
+  const hours = minutes / 60;
+  if (hours < 36) return `${Math.round(hours)}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/**
+ * The build badge. Clicking opens the build in the browser — or, when there
+ * isn't one to open, the settings sheet that explains why.
+ */
+function buildBadge(id: string): HTMLElement | null {
+  const build = builds.get(id);
+  const glyph = build && BUILD_GLYPH[build.state];
+  if (!build || !glyph) return null;
+
+  const badge = document.createElement("span");
+  badge.className = `badge build ${build.state}`;
+  badge.textContent = glyph;
+  badge.title = build.error
+    ? `Build status unavailable — ${build.error}`
+    : [
+        `${build.pipeline} ${build.number}`.trim(),
+        [BUILD_WORD[build.state], build.branch, ago(build.time)].filter(Boolean).join(" · "),
+        build.pipelines > 1 ? `Latest of ${build.pipelines} pipelines` : build.source,
+      ]
+        .filter(Boolean)
+        .join("\n");
+  // The tab underneath activates on pointerdown and starts a drag with it.
+  badge.addEventListener("pointerdown", (e) => e.stopPropagation());
+  badge.onclick = (e) => {
+    e.stopPropagation();
+    if (build.url) void openUrl(build.url);
+    else showProjectSettings(id);
+  };
+  return badge;
+}
+
+/** The pending-changes, branch-count and build badges after the tab name. */
 function statusBadges(id: string): HTMLElement | null {
   const status = statuses.get(id);
-  if (!status || status.error) return null;
 
   const wrap = document.createElement("span");
   wrap.className = "tab-badges";
 
-  if (status.pending > 0) {
+  if (status && !status.error && status.pending > 0) {
     const pending = document.createElement("span");
     pending.className = "badge pending";
     pending.textContent = String(status.pending);
     pending.title = `${status.pending} uncommitted file${status.pending === 1 ? "" : "s"}`;
     wrap.appendChild(pending);
   }
-  if (status.branches > 0) {
+  if (status && !status.error && status.branches > 0) {
     const branches = document.createElement("span");
     branches.className = "badge branches";
     branches.textContent = `⎇${status.branches}`;
@@ -181,6 +273,8 @@ function statusBadges(id: string): HTMLElement | null {
       ` across ${status.stacks} stack${status.stacks === 1 ? "" : "s"}`;
     wrap.appendChild(branches);
   }
+  const build = buildBadge(id);
+  if (build) wrap.appendChild(build);
   return wrap.childElementCount ? wrap : null;
 }
 
@@ -191,7 +285,11 @@ function renderTabs(): void {
     const tab = document.createElement("div");
     tab.className = "tab" + (id === activeId ? " active" : "");
     if (id === draggingId) tab.classList.add("dragging");
-    tab.title = `${view.project.path}\nCtrl+${i + 1}`;
+    tab.title = `${view.project.path}\nCtrl+${i + 1} · right-click for settings`;
+    tab.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showProjectSettings(id);
+    });
     // Activate on press rather than click: the same gesture starts a drag, and
     // waiting for mouseup to switch tabs feels laggy.
     tab.addEventListener("pointerdown", (e) => {
@@ -400,6 +498,141 @@ async function showProjectPicker(): Promise<void> {
   }, "Open a project");
 }
 
+/* -------------------------------------------------------- project settings */
+
+/**
+ * Settings that belong to one repository rather than the app. They're keyed by
+ * repository path and kept beside the session in the app's config dir, not in a
+ * dotfile inside the repo: these are work repos shared with other people, and a
+ * tool's preferences have no business dirtying them.
+ */
+const projectSettings = new Map<string, ProjectSettings>();
+
+function projectSettingsFor(id: string): ProjectSettings {
+  return projectSettings.get(id) ?? { builds: emptyBuildConfig() };
+}
+
+/** A blank field means "not set", rather than "set to empty". */
+const trimmed = (value: string): string | null => value.trim() || null;
+
+/** What the poll last made of this project, in a sentence. */
+function buildSummary(build: BuildStatus | undefined): string {
+  if (!build) return "Nothing polled yet.";
+  if (build.state === "off") return "Turned off for this project.";
+  if (build.error) return build.source ? `${build.source} — ${build.error}` : build.error;
+  if (build.state === "none") return "No Azure DevOps remote on this repository.";
+  const word = (BUILD_WORD[build.state] ?? build.state).toLowerCase();
+  return `${build.source} — ${build.pipeline} ${build.number} ${word} ${ago(build.time)}`.trim();
+}
+
+function showProjectSettings(id: string): void {
+  const view = views.get(id);
+  if (!view) return;
+  const current = projectSettingsFor(id).builds;
+  const build = builds.get(id);
+  // `org / project / repo` as the poll resolved it, so the override boxes can
+  // show what they'd be overriding.
+  const detected = (build?.source ?? "").split(" / ");
+
+  openModal((body) => {
+    const form = document.createElement("div");
+    form.className = "form";
+
+    const field = (label: string, hint: string, control: HTMLElement): void => {
+      const row = document.createElement("label");
+      row.className = "form-row";
+      const heading = document.createElement("div");
+      heading.className = "form-label";
+      heading.textContent = label;
+      const note = document.createElement("div");
+      note.className = "form-hint";
+      note.textContent = hint;
+      heading.appendChild(note);
+      row.append(heading, control);
+      form.appendChild(row);
+    };
+
+    const textbox = (value: string | null, placeholder: string): HTMLInputElement => {
+      const el = document.createElement("input");
+      el.className = "form-input";
+      el.value = value ?? "";
+      el.placeholder = placeholder;
+      el.spellcheck = false;
+      return el;
+    };
+
+    const mode = document.createElement("select");
+    mode.className = "form-input";
+    for (const [value, label] of [
+      ["auto", "Auto — on when the remote is Azure DevOps"],
+      ["on", "Always on"],
+      ["off", "Off"],
+    ]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      mode.appendChild(option);
+    }
+    mode.value = current.enabled === null ? "auto" : current.enabled ? "on" : "off";
+
+    const organization = textbox(current.organization, detected[0] || "from the remote");
+    const project = textbox(current.project, detected[1] || "from the remote");
+    const repository = textbox(current.repository, detected[2] || "from the remote");
+    const definitions = textbox(current.definitions.join(", "), "every pipeline building this repo");
+    const branch = textbox(current.branch, "whichever branch built last");
+
+    field("Build badge", "A third badge with the latest Azure DevOps build.", mode);
+    field("Organisation", "dev.azure.com/<organisation>", organization);
+    field("Project", "The team project the pipelines live in.", project);
+    field("Repository", "The repository name in Azure DevOps.", repository);
+    field("Pipelines", "Definition ids, comma separated. Blank finds them by repository.", definitions);
+    field("Branch", "Only report builds of this branch.", branch);
+    body.appendChild(form);
+
+    const status = document.createElement("p");
+    status.className = "muted form-note";
+    status.textContent = buildSummary(build);
+    body.appendChild(status);
+
+    const actions = document.createElement("div");
+    actions.className = "sheet-actions end";
+    const save = document.createElement("button");
+    save.className = "btn primary";
+    save.textContent = "Save";
+    save.onclick = async () => {
+      const next: ProjectSettings = {
+        builds: {
+          enabled: mode.value === "auto" ? null : mode.value === "on",
+          organization: trimmed(organization.value),
+          project: trimmed(project.value),
+          repository: trimmed(repository.value),
+          // Anything that isn't a positive integer was never a definition id.
+          definitions: definitions.value
+            .split(/[\s,]+/)
+            .map(Number)
+            .filter((n) => Number.isInteger(n) && n > 0),
+          branch: trimmed(branch.value),
+        },
+      };
+      projectSettings.set(id, next);
+      closeModal();
+      // Drop the old answer rather than leaving a badge that the new settings
+      // no longer stand behind.
+      builds.delete(id);
+      renderTabs();
+      await saveProjectSettings(id, next).catch(showFatal);
+      await refreshStatuses();
+    };
+    const cancel = document.createElement("button");
+    cancel.className = "btn";
+    cancel.textContent = "Cancel";
+    cancel.onclick = closeModal;
+    actions.append(save, cancel);
+    body.appendChild(actions);
+
+    setTimeout(() => mode.focus(), 0);
+  }, `${view.project.name} settings`);
+}
 
 /* --------------------------------------------------------------- shortcuts */
 
@@ -440,6 +673,9 @@ window.addEventListener(
     } else if (!e.shiftKey && e.code === "KeyW") {
       take();
       if (activeId) closeProject(activeId);
+    } else if (e.code === "Comma") {
+      take();
+      if (activeId) showProjectSettings(activeId);
     } else if (e.code === "BracketRight" || (e.shiftKey && e.code === "Backquote")) {
       take();
       view?.cyclePane(1);
@@ -512,6 +748,10 @@ async function restoreSession(projects: Project[]): Promise<number> {
 async function boot(): Promise<void> {
   // A dev-server reload drops the panes but not the processes behind them.
   await invoke("pty_kill_all").catch(() => {});
+  // Before any tab opens: the first status poll needs each project's settings.
+  for (const [id, settings] of Object.entries(await projectSettingsAll().catch(() => ({})))) {
+    projectSettings.set(id, settings);
+  }
   const projects = await listProjects(getSettings().scanRoot);
   if (await restoreSession(projects)) return;
   emptyEl.classList.remove("hidden");

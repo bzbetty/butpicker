@@ -18,9 +18,64 @@ export interface ProjectStatus {
   error: string | null;
 }
 
+/** Per-project Azure DevOps configuration; every field is optional. */
+export interface BuildConfig {
+  /** null is auto: the badge appears when the remote points at Azure DevOps. */
+  enabled: boolean | null;
+  organization: string | null;
+  project: string | null;
+  repository: string | null;
+  definitions: number[];
+  branch: string | null;
+}
+
+export interface ProjectSettings {
+  builds: BuildConfig;
+}
+
+export type BuildState =
+  | "off"
+  | "none"
+  | "error"
+  | "succeeded"
+  | "failed"
+  | "partial"
+  | "canceled"
+  | "running"
+  | "queued"
+  | "unknown";
+
+export interface BuildStatus {
+  state: BuildState;
+  pipeline: string;
+  number: string;
+  branch: string;
+  url: string;
+  time: string | null;
+  pipelines: number;
+  /** `org / project / repo`, however it was arrived at. */
+  source: string;
+  error: string | null;
+}
+
+export const emptyBuildConfig = (): BuildConfig => ({
+  enabled: null,
+  organization: null,
+  project: null,
+  repository: null,
+  definitions: [],
+  branch: null,
+});
+
 export const listProjects = (root: string) => invoke<Project[]>("projects_list", { root });
 export const projectStatus = (path: string, program: string, ignoreBranches: string[]) =>
   invoke<ProjectStatus>("project_status", { path, program, ignoreBranches });
+export const buildStatus = (path: string, config: BuildConfig) =>
+  invoke<BuildStatus>("build_status", { path, config });
+export const projectSettingsAll = () =>
+  invoke<Record<string, ProjectSettings>>("project_settings_all");
+export const saveProjectSettings = (id: string, settings: ProjectSettings) =>
+  invoke<void>("project_settings_save", { id, settings });
 export const getSession = () => invoke<Session>("session_get");
 export const saveSession = (open: string[], active: string | null) =>
   invoke<void>("session_save", { open, active });

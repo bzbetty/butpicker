@@ -43,10 +43,62 @@ focus) and shows what it finds:
 | --- | --- |
 | amber count | uncommitted files, including those assigned to a stack |
 | blue `⎇` count | applied branches across all stacks |
+| `✓` `✗` `●` | the latest Azure DevOps build (see below) |
 
 Branches listed in `statusIgnoreBranches` are left out of the count — `plans`
 by default, since plan branches get pushed but never merged and would otherwise
 sit in the badge forever.
+
+## Build status
+
+The third badge is the repository's latest Azure DevOps build: green succeeded,
+red failed, amber partially succeeded, a pulsing blue dot for one that's running
+now. Hover for the pipeline, build number, branch and age; click to open the
+build in the browser.
+
+Nothing to configure in the normal case. The remote already says which build to
+look at —
+
+```
+https://Enlighten@dev.azure.com/Enlighten/Enlighten%20Internal/_git/Job
+                                └── org ──┘└──── project ────┘     └repo┘
+```
+
+— so each tab finds its own pipelines by repository rather than you maintaining
+a list somewhere. A repo with no Azure DevOps remote simply has no third badge.
+`origin` is preferred, but any remote that points at Azure will do, which covers
+a GitHub-origin repo that still builds in Azure.
+
+Where a repo has several pipelines, a red one wins over a greener one that ran
+more recently; otherwise the newest build speaks for the repo. The badge shows
+whichever branch built last unless you pin one in the project settings.
+
+Authentication is the az CLI's login (`az account get-access-token` against the
+Azure DevOps resource id), so there's no PAT to store anywhere. If `az login`
+has lapsed the badge turns into a muted `?` whose tooltip says so; clicking it
+opens the settings sheet, which spells out the last error in full.
+
+Answers are cached for a minute in the Rust side, so the six-second tab poll
+doesn't turn into a six-second Azure poll. Repository ids are cached for the
+life of the process and the token for twenty minutes.
+
+## Project settings
+
+Some settings belong to one repository rather than to the app. Right-click a tab
+(or `Ctrl+,` for the current one) to open its sheet:
+
+| Setting | Default | What it's for |
+| --- | --- | --- |
+| Build badge | Auto | Auto shows the badge when the remote is Azure DevOps. `Off` silences a repo whose pipeline you don't care about; `Always on` is for one where the coordinates are filled in by hand. |
+| Organisation / Project / Repository | from the remote | Overrides for a repo whose remote doesn't spell them out, or whose Azure repo is named differently from the folder. |
+| Pipelines | every pipeline building the repo | Definition ids, comma separated, when you'd rather pin them. |
+| Branch | whichever built last | Only report builds of this branch. |
+
+These live beside the open-tabs session in
+`%APPDATA%\dev.bzbetty.butpicker\session.json`, keyed by repository path, rather
+than in a dotfile inside the repo: work repos are shared with other people, and
+a tool's preferences have no business dirtying them. A project whose settings
+are all defaults isn't written at all.
 
 ## Session restore
 
@@ -64,6 +116,7 @@ Repositories that have since disappeared are skipped rather than erroring.
 | --- | --- |
 | `Ctrl+T` | Open the repository picker |
 | `Ctrl+W` | Close the current tab (middle-click also works) |
+| `Ctrl+,` | Project settings for the current tab (right-click also works) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+1`…`Ctrl+9` | Jump to tab by position |
 | `Ctrl+Shift+PageUp` / `PageDown` | Move the current tab left / right |
@@ -99,7 +152,8 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev \
 
 ## Configuration
 
-Settings live in `localStorage` under `butpicker.settings`:
+App-wide settings live in `localStorage` under `butpicker.settings`. Per-project
+settings are separate — see [Project settings](#project-settings).
 
 ```json
 {
@@ -120,7 +174,7 @@ you'd rather. `butCommand` resolves through `PATH`; set an absolute path if you
 run a non-default build. A `scanRoot` starting with `~/` is expanded against the
 home directory.
 
-Open tabs are stored separately, in
+Open tabs and per-project settings are stored separately, in
 `%APPDATA%\dev.bzbetty.butpicker\session.json` (Windows) or
 `~/.config/dev.bzbetty.butpicker/session.json` (Linux).
 
@@ -132,6 +186,10 @@ Open tabs are stored separately, in
   `Uint8Array` and hands it straight to xterm.
 - `src-tauri/src/status.rs` — shells out to `but status --json` for the badges,
   with `CREATE_NO_WINDOW` so polling doesn't flash a console every six seconds.
+- `src-tauri/src/builds.rs` — the Azure DevOps badge: parses the git remote for
+  org/project/repo, borrows the az CLI's login for a bearer token, then asks the
+  Git and Builds REST APIs. Token, repository ids and answers are all cached, so
+  a tab poll usually costs nothing.
 - `src-tauri/src/projects.rs` — directory listing plus the session file.
 - `src/pty.ts` — one `TerminalPane` per pty: xterm, fit addon, WebGL renderer
   with a silent fallback, and a `ResizeObserver` keeping the pty's window size
@@ -158,7 +216,10 @@ terminal regardless of how ButPicker itself was launched.
   shell, however you had them arranged.
 - Closing a pane kills the process attached to the pty. Grandchildren it spawned
   are left to ConPTY's teardown rather than tracked in a job object.
-- Settings have no UI; edit `butpicker.settings` via devtools.
+- App-wide settings have no UI; edit `butpicker.settings` via devtools. Project
+  settings do have one.
+- Build status is Azure DevOps only. GitHub Actions would be another provider in
+  `builds.rs` and another couple of fields in the project sheet.
 - Only the immediate subdirectories of the root are scanned, not nested repos.
 
 ## Licence
