@@ -39,6 +39,13 @@ function installGutter(gutter: HTMLElement, prev: HTMLElement, next: HTMLElement
 }
 
 /**
+ * Fraction of the width the TUI starts with. The TUI is the thing you read —
+ * branches, commits and diffs all want the room — while the shell beside it is
+ * mostly for one-line commands. The gutter still drags either way.
+ */
+const TUI_SHARE = 0.75;
+
+/**
  * One project: the `but tui` on the left, a resizable stack of shells on the
  * right, all rooted at the project directory.
  */
@@ -66,11 +73,11 @@ export class ProjectView {
       label: `but tui — ${project.name}`,
       pinned: true,
     });
-    this.butPane.element.style.flexGrow = "1";
+    this.butPane.element.style.flexGrow = String(TUI_SHARE);
 
     this.rightStack = document.createElement("div");
     this.rightStack.className = "vsplit";
-    this.rightStack.style.flexGrow = "1";
+    this.rightStack.style.flexGrow = String(1 - TUI_SHARE);
 
     const gutter = document.createElement("div");
     gutter.className = "gutter gutter-x";
