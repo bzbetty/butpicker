@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- ButPicker. It's a peach, it's a pair of cheeks, and the crease is a
+       branch graph. Palette lifted from styles.css so it matches the app. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b2430"/>
+      <stop offset="1" stop-color="#0b0f14"/>
+    </linearGradient>
+    <radialGradient id="flesh" cx="0.33" cy="0.24" r="0.95">
+      <stop offset="0" stop-color="#ffcf9a"/>
+      <stop offset="0.40" stop-color="#f4913f"/>
+      <stop offset="1" stop-color="#c4402c"/>
+    </radialGradient>
+    <linearGradient id="leaf" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#2ea043"/>
+      <stop offset="1" stop-color="#56d364"/>
+    </linearGradient>
+    <path id="peach" d="M256 222
+             C232 160 166 140 130 178
+             C94 216 88 270 100 314
+             C112 396 174 458 256 458
+             C338 458 402 396 414 314
+             C424 270 418 216 382 178
+             C346 140 280 160 256 222 Z"/>
+    <clipPath id="body"><use href="#peach"/></clipPath>
+  </defs>
+
+  <rect width="512" height="512" rx="114" fill="url(#bg)"/>
+  <rect x="3" y="3" width="506" height="506" rx="111" fill="none" stroke="#30363d" stroke-opacity="0.7" stroke-width="6"/>
+
+  <!-- stem and leaf, so it reads "peach" before it reads "cheeky" -->
+  <path d="M257 232 C252 196 256 172 268 152" fill="none" stroke="#6f4423" stroke-width="14" stroke-linecap="round"/>
+  <path d="M270 168 C300 122 352 114 382 126 C374 170 336 200 292 192 Z" fill="url(#leaf)"/>
+  <path d="M282 180 C314 162 348 144 376 134" fill="none" stroke="#0d1117" stroke-opacity="0.32" stroke-width="7" stroke-linecap="round"/>
+
+  <g clip-path="url(#body)">
+    <use href="#peach" fill="url(#flesh)"/>
+    <ellipse cx="164" cy="256" rx="46" ry="62" fill="#fff4e3" opacity="0.13" transform="rotate(-30 164 256)"/>
+
+    <!-- the crease is the trunk; one branch peels off down the right cheek -->
+    <g fill="none" stroke="#0d1117" stroke-width="24" stroke-linecap="round" opacity="0.93">
+      <path d="M256 226 C242 292 244 376 256 464"/>
+      <path d="M248 330 C294 342 320 366 330 398"/>
+    </g>
+    <circle cx="248" cy="300" r="26" fill="#0d1117" opacity="0.93"/>
+    <circle cx="248" cy="300" r="12" fill="#e3b341"/>
+    <circle cx="332" cy="404" r="26" fill="#0d1117" opacity="0.93"/>
+    <circle cx="332" cy="404" r="12" fill="#79c0ff"/>
+  </g>
+</svg>
