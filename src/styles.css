@@ -1,0 +1,578 @@
+:root {
+  --bg: #0d1117;
+  --bg-raised: #161b22;
+  --bg-tab: #10151c;
+  --border: #21262d;
+  --text: #c9d1d9;
+  --text-dim: #7d8590;
+  --accent: #58a6ff;
+  --accent-soft: #1f6feb33;
+  --header-h: 34px;
+  --tabbar-h: 42px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ------------------------------------------------------------------- tabs */
+
+.tabbar {
+  display: flex;
+  align-items: stretch;
+  height: var(--tabbar-h);
+  flex: 0 0 auto;
+  background: var(--bg-tab);
+  border-bottom: 1px solid var(--border);
+}
+
+.tabs {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* Inactive tabs stay fully readable — dimming them to --text-dim made the
+   strip hard to scan, which is the one thing a tab strip has to be good at.
+   Active is distinguished by background and accent, not by the others fading. */
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 16px;
+  max-width: 240px;
+  border-right: 1px solid var(--border);
+  color: #c2cbd5;
+  font-size: 13.5px;
+  cursor: default;
+  white-space: nowrap;
+  border-top: 2px solid transparent;
+}
+
+.tab:hover {
+  background: #1a2029;
+  color: var(--brightWhite, #f0f6fc);
+}
+
+.tab.active {
+  background: var(--bg);
+  color: #f0f6fc;
+  font-weight: 600;
+  border-top-color: var(--accent);
+}
+
+.tab.dragging {
+  background: var(--accent-soft);
+  opacity: 0.75;
+}
+
+body.dragging-tab,
+body.dragging-tab * {
+  cursor: grabbing !important;
+}
+
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-close,
+.tab-add {
+  border: 0;
+  background: transparent;
+  color: #8b949e;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tab-close:hover,
+.tab-add:hover {
+  background: #30363d;
+  color: var(--text);
+}
+
+.tab-add {
+  align-self: center;
+  margin: 0 8px;
+  font-size: 17px;
+}
+
+.tabbar-spacer {
+  flex: 1;
+}
+
+.hints {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-right: 14px;
+  color: #4d5864;
+  font-size: 11px;
+}
+
+.hints kbd {
+  font: inherit;
+  background: #1a2029;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-right: 2px;
+}
+
+/* ------------------------------------------------------------- pane layout */
+
+.views {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.project {
+  position: absolute;
+  inset: 0;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.hsplit,
+.vsplit {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.hsplit {
+  flex-direction: row;
+}
+
+.vsplit {
+  flex-direction: column;
+  flex-basis: 0;
+}
+
+.gutter {
+  flex: 0 0 5px;
+  background: var(--border);
+  transition: background 120ms;
+}
+
+.gutter:hover {
+  background: var(--accent);
+}
+
+.gutter-x {
+  cursor: col-resize;
+}
+
+.gutter-y {
+  cursor: row-resize;
+}
+
+body.resizing-x,
+body.resizing-x * {
+  cursor: col-resize !important;
+}
+
+body.resizing-y,
+body.resizing-y * {
+  cursor: row-resize !important;
+}
+
+.pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex-basis: 0;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--header-h);
+  flex: 0 0 var(--header-h);
+  padding: 0 6px 0 12px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.pane.active .pane-header {
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.pane-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Faint rather than invisible: a control you can't see is a control you don't
+   know you can click. */
+.pane-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+.pane:hover .pane-btn {
+  opacity: 1;
+}
+
+.pane-btn:hover {
+  background: #30363d;
+  color: var(--text);
+}
+
+.pane-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 4px 0 4px 8px;
+  user-select: text;
+}
+
+.pane-body .xterm {
+  height: 100%;
+}
+
+/* xterm's viewport brings the default light scrollbar, which reads as a bright
+   seam against the terminal. */
+.pane-body .xterm-viewport {
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: #30363d transparent;
+}
+
+.pane-body .xterm-viewport::-webkit-scrollbar {
+  width: 9px;
+}
+
+.pane-body .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pane-body .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 5px;
+}
+
+.pane-body .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #484f58;
+}
+
+.pane-overlay {
+  position: absolute;
+  inset: var(--header-h) 0 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: #0d1117e6;
+  backdrop-filter: blur(2px);
+}
+
+.pane-overlay pre {
+  margin: 0;
+  max-width: 80%;
+  white-space: pre-wrap;
+  text-align: center;
+  color: var(--text-dim);
+  font-family: "Cascadia Mono", Consolas, monospace;
+}
+
+/* ------------------------------------------------------------ empty state */
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.empty h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+}
+
+.empty p {
+  margin: 0 0 12px;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------------------------ modal */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 8vh;
+  background: #010409b3;
+  z-index: 10;
+}
+
+.sheet {
+  width: min(680px, 90vw);
+  max-height: 78vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px #0008;
+  overflow: hidden;
+}
+
+.sheet-header {
+  display: flex;
+  align-items: center;
+  padding: 12px 10px 12px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sheet-header h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.sheet-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.sheet-close:hover {
+  background: #30363d;
+  color: var(--text);
+}
+
+.sheet-body {
+  padding: 14px 18px 18px;
+  overflow-y: auto;
+}
+
+.sheet-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.btn {
+  border: 1px solid var(--border);
+  background: #21262d;
+  color: var(--text);
+  padding: 7px 14px;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: #30363d;
+}
+
+.btn.primary {
+  background: #238636;
+  border-color: #2ea04366;
+  color: #fff;
+}
+
+.btn.primary:hover {
+  background: #2ea043;
+}
+
+.filter {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.filter:focus {
+  border-color: var(--accent);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: default;
+}
+
+.row:hover {
+  background: var(--accent-soft);
+}
+
+.row.check {
+  cursor: pointer;
+}
+
+.row.open .row-name::after {
+  content: " \00b7 open";
+  color: var(--accent);
+  font-weight: 400;
+}
+
+.row-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-name {
+  font-weight: 600;
+}
+
+.row-path {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-btn,
+.overlay-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  padding: 4px 10px;
+  border-radius: 5px;
+  font: inherit;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.row:hover .row-btn {
+  opacity: 1;
+}
+
+.row-btn:hover,
+.overlay-btn:hover {
+  background: #30363d;
+  color: var(--text);
+}
+
+.overlay-btn {
+  opacity: 1;
+}
+
+.muted {
+  color: var(--text-dim);
+}
+
+.row.cursor {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.fatal {
+  max-width: 80%;
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: #21262d;
+  border: 1px solid #f8514966;
+  border-radius: 6px;
+  color: var(--brightRed, #ffa198);
+  font: 12px/1.5 "Cascadia Mono", Consolas, monospace;
+  white-space: pre-wrap;
+  text-align: left;
+  user-select: text;
+}
+
+/* ------------------------------------------------------------- tab badges */
+
+.tab-badges {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Amber for work sitting uncommitted, blue for the shape of the workspace:
+   one is a nudge, the other is just information. */
+.badge.pending {
+  background: #9e6a0333;
+  color: #e3b341;
+}
+
+.badge.branches {
+  background: #1f6feb26;
+  color: #79c0ff;
+}

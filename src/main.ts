@@ -1,0 +1,521 @@
+import "@xterm/xterm/css/xterm.css";
+import "./styles.css";
+
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  getSession,
+  listProjects,
+  matchesSubsequence,
+  projectStatus,
+  saveSession,
+  type Project,
+  type ProjectStatus,
+} from "./projects";
+import { getSettings } from "./settings";
+import { ProjectView } from "./workspace";
+
+const tabsEl = document.getElementById("tabs") as HTMLDivElement;
+const viewsEl = document.getElementById("views") as HTMLDivElement;
+const emptyEl = document.getElementById("empty") as HTMLDivElement;
+const modalEl = document.getElementById("modal") as HTMLDivElement;
+
+const views = new Map<string, ProjectView>();
+let order: string[] = [];
+let activeId: string | null = null;
+let restoring = false;
+
+/* ------------------------------------------------------------------ session */
+
+let sessionTimer: number | undefined;
+
+/**
+ * Persist the open tabs on every change rather than only on close: a crash or a
+ * kill shouldn't cost the workspace. Coalesced, because activating a tab while
+ * cycling would otherwise write once per keystroke.
+ */
+function rememberSession(): void {
+  if (restoring) return;
+  clearTimeout(sessionTimer);
+  sessionTimer = setTimeout(() => {
+    void saveSession([...order], activeId);
+  }, 250);
+}
+
+/* ---------------------------------------------------------------- projects */
+
+async function openProject(project: Project): Promise<void> {
+  if (views.has(project.id)) {
+    activate(project.id);
+    return;
+  }
+  const view = new ProjectView(project);
+  view.element.classList.add("hidden");
+  viewsEl.appendChild(view.element);
+  views.set(project.id, view);
+  order.push(project.id);
+  renderTabs();
+  // Make it visible before starting, so the ptys get honest dimensions.
+  activate(project.id);
+  rememberSession();
+  await view.start();
+  view.fitAll();
+  void refreshStatuses();
+}
+
+function activate(id: string): void {
+  if (!views.has(id)) return;
+  activeId = id;
+  for (const [key, view] of views) {
+    view.element.classList.toggle("hidden", key !== id);
+  }
+  emptyEl.classList.toggle("hidden", views.size > 0);
+  const view = views.get(id)!;
+  view.fitAll();
+  view.active.focus();
+  void getCurrentWindow().setTitle(`${view.project.name} — ButPicker`);
+  renderTabs();
+  rememberSession();
+}
+
+function closeProject(id: string): void {
+  const view = views.get(id);
+  if (!view) return;
+  view.dispose();
+  views.delete(id);
+  statuses.delete(id);
+  const index = order.indexOf(id);
+  order = order.filter((x) => x !== id);
+  renderTabs();
+  rememberSession();
+  if (activeId !== id) return;
+  const next = order[Math.min(index, order.length - 1)];
+  if (next) {
+    activate(next);
+  } else {
+    activeId = null;
+    emptyEl.classList.remove("hidden");
+    void getCurrentWindow().setTitle("ButPicker");
+    rememberSession();
+  }
+}
+
+function cycleProject(direction: 1 | -1): void {
+  if (order.length < 2 || !activeId) return;
+  const index = order.indexOf(activeId);
+  activate(order[(index + direction + order.length) % order.length]);
+}
+
+/* ------------------------------------------------------------------ status */
+
+const statuses = new Map<string, ProjectStatus>();
+let statusTimer: number | undefined;
+
+/**
+ * Polls `but status` for the open tabs. Only while the window has focus —
+ * a background window spawning a process per project per interval is rude.
+ */
+async function refreshStatuses(): Promise<void> {
+  if (!document.hasFocus() || views.size === 0) return;
+  const { butCommand, statusIgnoreBranches } = getSettings();
+  const results = await Promise.all(
+    [...views.values()].map(async (view) => {
+      const status = await projectStatus(view.project.path, butCommand, statusIgnoreBranches).catch(() => null);
+      return [view.project.id, status] as const;
+    }),
+  );
+  let changed = false;
+  for (const [id, status] of results) {
+    if (!status) continue;
+    const previous = statuses.get(id);
+    if (
+      previous?.pending !== status.pending ||
+      previous?.branches !== status.branches ||
+      previous?.error !== status.error
+    ) {
+      statuses.set(id, status);
+      changed = true;
+    }
+  }
+  if (changed) renderTabs();
+}
+
+function startStatusPolling(): void {
+  clearInterval(statusTimer);
+  void refreshStatuses();
+  statusTimer = setInterval(() => void refreshStatuses(), 6000);
+}
+
+// Coming back to the window should put the caret back in the terminal you
+// were using, not leave keystrokes going nowhere.
+window.addEventListener("focus", () => {
+  void refreshStatuses();
+  if (modalEl.classList.contains("hidden")) currentView()?.active.focus();
+});
+
+/* -------------------------------------------------------------------- tabs */
+
+let draggingId: string | null = null;
+
+/** The pending-changes and branch-count badges that sit after the tab name. */
+function statusBadges(id: string): HTMLElement | null {
+  const status = statuses.get(id);
+  if (!status || status.error) return null;
+
+  const wrap = document.createElement("span");
+  wrap.className = "tab-badges";
+
+  if (status.pending > 0) {
+    const pending = document.createElement("span");
+    pending.className = "badge pending";
+    pending.textContent = String(status.pending);
+    pending.title = `${status.pending} uncommitted file${status.pending === 1 ? "" : "s"}`;
+    wrap.appendChild(pending);
+  }
+  if (status.branches > 0) {
+    const branches = document.createElement("span");
+    branches.className = "badge branches";
+    branches.textContent = `⎇${status.branches}`;
+    branches.title =
+      `${status.branches} applied branch${status.branches === 1 ? "" : "es"}` +
+      ` across ${status.stacks} stack${status.stacks === 1 ? "" : "s"}`;
+    wrap.appendChild(branches);
+  }
+  return wrap.childElementCount ? wrap : null;
+}
+
+function renderTabs(): void {
+  tabsEl.replaceChildren();
+  order.forEach((id, i) => {
+    const view = views.get(id)!;
+    const tab = document.createElement("div");
+    tab.className = "tab" + (id === activeId ? " active" : "");
+    if (id === draggingId) tab.classList.add("dragging");
+    tab.title = `${view.project.path}\nCtrl+${i + 1}`;
+    // Activate on press rather than click: the same gesture starts a drag, and
+    // waiting for mouseup to switch tabs feels laggy.
+    tab.addEventListener("pointerdown", (e) => {
+      if (e.button === 1) {
+        closeProject(id);
+        return;
+      }
+      if (e.button !== 0) return;
+      activate(id);
+      beginTabDrag(id, e);
+    });
+
+    const label = document.createElement("span");
+    label.className = "tab-label";
+    label.textContent = view.project.name;
+
+    const close = document.createElement("button");
+    close.className = "tab-close";
+    close.textContent = "×";
+    close.title = "Close project (Ctrl+W)";
+    close.addEventListener("pointerdown", (e) => e.stopPropagation());
+    close.onclick = (e) => {
+      e.stopPropagation();
+      closeProject(id);
+    };
+
+    const badges = statusBadges(id);
+    if (badges) tab.append(label, badges, close);
+    else tab.append(label, close);
+    tabsEl.appendChild(tab);
+  });
+}
+
+/** Index the pointer currently sits over, by tab midpoints. */
+function tabIndexAt(x: number): number {
+  const tabs = [...tabsEl.children] as HTMLElement[];
+  for (let i = 0; i < tabs.length; i++) {
+    const rect = tabs[i].getBoundingClientRect();
+    if (x < rect.left + rect.width / 2) return i;
+  }
+  return tabs.length - 1;
+}
+
+function moveTab(id: string, to: number): boolean {
+  const from = order.indexOf(id);
+  const target = Math.max(0, Math.min(order.length - 1, to));
+  if (from < 0 || from === target) return false;
+  order.splice(target, 0, ...order.splice(from, 1));
+  renderTabs();
+  return true;
+}
+
+/**
+ * Reorders live while the pointer moves, so the strip always shows where the
+ * tab will land. The drag only engages past a few pixels — otherwise every
+ * tab click with a twitchy hand would count as a reorder.
+ */
+function beginTabDrag(id: string, down: PointerEvent): void {
+  const originX = down.clientX;
+  let engaged = false;
+
+  const onMove = (move: PointerEvent) => {
+    if (!engaged) {
+      if (Math.abs(move.clientX - originX) < 5) return;
+      engaged = true;
+      draggingId = id;
+      document.body.classList.add("dragging-tab");
+      renderTabs();
+    }
+    moveTab(id, tabIndexAt(move.clientX));
+  };
+
+  const onUp = () => {
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    if (!engaged) return;
+    draggingId = null;
+    document.body.classList.remove("dragging-tab");
+    renderTabs();
+    rememberSession();
+  };
+
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onUp);
+}
+
+function shiftActiveTab(direction: 1 | -1): void {
+  if (!activeId) return;
+  if (moveTab(activeId, order.indexOf(activeId) + direction)) rememberSession();
+}
+
+/* ------------------------------------------------------------------- modal */
+
+function closeModal(): void {
+  modalEl.classList.add("hidden");
+  modalEl.replaceChildren();
+  if (activeId) views.get(activeId)?.active.focus();
+}
+
+function openModal(build: (body: HTMLDivElement) => void, title: string): HTMLDivElement {
+  modalEl.replaceChildren();
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+
+  const header = document.createElement("div");
+  header.className = "sheet-header";
+  const heading = document.createElement("h2");
+  heading.textContent = title;
+  const dismiss = document.createElement("button");
+  dismiss.className = "sheet-close";
+  dismiss.textContent = "×";
+  dismiss.onclick = closeModal;
+  header.append(heading, dismiss);
+
+  const body = document.createElement("div");
+  body.className = "sheet-body";
+  build(body);
+
+  sheet.append(header, body);
+  modalEl.appendChild(sheet);
+  modalEl.classList.remove("hidden");
+  modalEl.onclick = (e) => {
+    if (e.target === modalEl) closeModal();
+  };
+  return body;
+}
+
+async function showProjectPicker(): Promise<void> {
+  const root = getSettings().scanRoot;
+  let projects: Project[] = [];
+  let loadError: string | null = null;
+  try {
+    projects = await listProjects(root);
+  } catch (err) {
+    loadError = String(err);
+  }
+
+  openModal((body) => {
+    if (loadError || projects.length === 0) {
+      const hint = document.createElement("p");
+      hint.className = "muted";
+      hint.textContent = loadError ?? `No git repositories directly under ${root}.`;
+      body.appendChild(hint);
+      return;
+    }
+
+    const filter = document.createElement("input");
+    filter.className = "filter";
+    filter.placeholder = `Filter ${projects.length} repos in ${root}…`;
+    body.appendChild(filter);
+
+    const list = document.createElement("div");
+    list.className = "list";
+    body.appendChild(list);
+
+    let matches: Project[] = [];
+    let cursor = 0;
+
+    const draw = (raw: string) => {
+      const needle = raw.toLowerCase();
+      // Repos already open sort last: the picker is for the ones you haven't
+      // got in front of you yet.
+      matches = projects
+        .filter((p) => matchesSubsequence(needle, p.name))
+        .sort((a, b) => Number(views.has(a.id)) - Number(views.has(b.id)));
+      cursor = Math.min(cursor, Math.max(0, matches.length - 1));
+
+      list.replaceChildren();
+      matches.forEach((project, index) => {
+        const row = document.createElement("div");
+        row.className = "row" + (views.has(project.id) ? " open" : "");
+        row.classList.toggle("cursor", index === cursor);
+        row.onclick = async () => {
+          closeModal();
+          await openProject(project);
+        };
+
+        const name = document.createElement("div");
+        name.className = "row-name";
+        name.textContent = project.name;
+        row.appendChild(name);
+        list.appendChild(row);
+      });
+    };
+
+    filter.oninput = () => {
+      cursor = 0;
+      draw(filter.value);
+    };
+    filter.onkeydown = async (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        cursor = Math.max(0, Math.min(matches.length - 1, cursor + step));
+        draw(filter.value);
+        list.children[cursor]?.scrollIntoView({ block: "nearest" });
+      } else if (e.key === "Enter" && matches[cursor]) {
+        e.preventDefault();
+        const project = matches[cursor];
+        closeModal();
+        await openProject(project);
+      }
+    };
+    draw("");
+    setTimeout(() => filter.focus(), 0);
+  }, "Open a project");
+}
+
+
+/* --------------------------------------------------------------- shortcuts */
+
+function currentView(): ProjectView | null {
+  return activeId ? (views.get(activeId) ?? null) : null;
+}
+
+window.addEventListener(
+  "keydown",
+  (e) => {
+    const ctrl = e.ctrlKey && !e.altKey;
+    if (!ctrl) return;
+
+    const view = currentView();
+    const take = () => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    if (e.shiftKey && e.code === "KeyT") {
+      take();
+      view?.addShell();
+    } else if (e.shiftKey && e.code === "KeyW") {
+      take();
+      view?.closeActivePane();
+    } else if (e.shiftKey && e.code === "KeyR") {
+      take();
+      void view?.tui.restart();
+    } else if (e.shiftKey && (e.code === "PageUp" || e.code === "PageDown")) {
+      take();
+      shiftActiveTab(e.code === "PageDown" ? 1 : -1);
+    } else if (e.code === "Tab") {
+      take();
+      cycleProject(e.shiftKey ? -1 : 1);
+    } else if (!e.shiftKey && e.code === "KeyT") {
+      take();
+      void showProjectPicker();
+    } else if (!e.shiftKey && e.code === "KeyW") {
+      take();
+      if (activeId) closeProject(activeId);
+    } else if (e.code === "BracketRight" || (e.shiftKey && e.code === "Backquote")) {
+      take();
+      view?.cyclePane(1);
+    } else if (/^Digit[1-9]$/.test(e.code)) {
+      take();
+      const index = Number(e.code.slice(5)) - 1;
+      if (order[index]) activate(order[index]);
+    }
+  },
+  { capture: true },
+);
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !modalEl.classList.contains("hidden")) closeModal();
+});
+
+window.addEventListener("resize", () => currentView()?.fitAll());
+
+// The debounced write may still be pending when the window goes; flush it.
+void getCurrentWindow().onCloseRequested(async () => {
+  clearTimeout(sessionTimer);
+  await saveSession([...order], activeId).catch(() => {});
+});
+
+/* ------------------------------------------------------------------- start */
+
+(document.getElementById("add-tab") as HTMLButtonElement).onclick = () => void showProjectPicker();
+(document.getElementById("empty-add") as HTMLButtonElement).onclick = () =>
+  void showProjectPicker();
+
+/**
+ * Anything that escapes to the top level would otherwise leave a blank window
+ * with no clue why, so put it on screen.
+ */
+function showFatal(detail: unknown): void {
+  emptyEl.classList.remove("hidden");
+  const existing = emptyEl.querySelector(".fatal");
+  const box = existing ?? document.createElement("pre");
+  box.className = "fatal";
+  box.textContent = String(
+    detail instanceof Error ? (detail.stack ?? detail.message) : detail,
+  );
+  if (!existing) emptyEl.appendChild(box);
+}
+
+window.addEventListener("error", (e) => showFatal(e.error ?? e.message));
+window.addEventListener("unhandledrejection", (e) => showFatal(e.reason));
+
+/** Reopens last run's tabs, in their old order. Returns how many came back. */
+async function restoreSession(projects: Project[]): Promise<number> {
+  const session = await getSession().catch(() => null);
+  if (!session?.open.length) return 0;
+
+  const byId = new Map(projects.map((p) => [p.id, p]));
+  restoring = true;
+  try {
+    for (const id of session.open) {
+      const project = byId.get(id);
+      // Sequential, not Promise.all: a dozen ptys starting at once makes for a
+      // slow, flickery launch.
+      if (project) await openProject(project);
+    }
+  } finally {
+    restoring = false;
+  }
+  if (session.active && views.has(session.active)) activate(session.active);
+  return views.size;
+}
+
+async function boot(): Promise<void> {
+  // A dev-server reload drops the panes but not the processes behind them.
+  await invoke("pty_kill_all").catch(() => {});
+  const projects = await listProjects(getSettings().scanRoot);
+  if (await restoreSession(projects)) return;
+  emptyEl.classList.remove("hidden");
+  void showProjectPicker();
+}
+
+void boot().then(startStatusPolling).catch(showFatal);
