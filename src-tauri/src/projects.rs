@@ -54,10 +54,32 @@ fn save(app: &AppHandle, store: &Store) -> Result<(), String> {
     fs::write(&path, raw).map_err(|e| e.to_string())
 }
 
+/// Normalise separators so an id is the same string on every run: on Windows a
+/// root typed as `C:/git` would otherwise produce `C:/git\repo`, and session
+/// restore matches tabs by id. Posix paths are already canonical.
+#[cfg(windows)]
+fn normalise(path: &str) -> String {
+    path.replace('/', "\\")
+}
+
+#[cfg(not(windows))]
+fn normalise(path: &str) -> String {
+    path.to_string()
+}
+
+/// A root may be written with a leading `~`, which only a shell would expand.
+fn expand_home(root: &str) -> PathBuf {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    match (root.strip_prefix("~/").or_else(|| root.strip_prefix("~\\")), home) {
+        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+        _ => PathBuf::from(root),
+    }
+}
+
 /// Every git repository directly under `root`, alphabetically.
 #[tauri::command]
 pub fn projects_list(root: String) -> Result<Vec<Project>, String> {
-    let dir = PathBuf::from(&root);
+    let dir = expand_home(&root);
     if !dir.is_dir() {
         return Err(format!("{root} is not a directory"));
     }
@@ -67,10 +89,7 @@ pub fn projects_list(root: String) -> Result<Vec<Project>, String> {
         .flatten()
         .filter(|entry| entry.path().join(".git").exists())
         .map(|entry| {
-            // Normalise separators: a root typed as `C:/git` would otherwise
-            // produce `C:/git\repo`, and ids have to be stable across runs for
-            // session restore to match them.
-            let display = entry.path().to_string_lossy().replace('/', "\\");
+            let display = normalise(&entry.path().to_string_lossy());
             Project {
                 id: display.clone(),
                 name: entry.file_name().to_string_lossy().to_string(),

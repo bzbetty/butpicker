@@ -16,19 +16,34 @@ export interface Settings {
 
 const KEY = "butpicker.settings";
 
-const DEFAULTS: Settings = {
-  shell: "pwsh.exe",
-  shellArgs: ["-NoLogo"],
-  shellLabel: "pwsh",
-  butCommand: "but.exe",
-  butArgs: ["tui"],
-  // The TUI pane is always a real terminal, so say so outright rather than
-  // letting `but` infer a machine-readable format and refuse to start.
-  butEnv: { BUT_OUTPUT_FORMAT: "human" },
-  // Plans get pushed but never merged, so they are not outstanding work.
-  statusIgnoreBranches: ["plans"],
-  scanRoot: "C:\\git",
-};
+// The webview is the only platform signal available before any command runs,
+// and it is enough to pick sane executable names.
+const IS_WINDOWS = navigator.userAgent.includes("Windows");
+
+const DEFAULTS: Settings = IS_WINDOWS
+  ? {
+      shell: "pwsh.exe",
+      shellArgs: ["-NoLogo"],
+      shellLabel: "pwsh",
+      butCommand: "but.exe",
+      butArgs: ["tui"],
+      // The TUI pane is always a real terminal, so say so outright rather than
+      // letting `but` infer a machine-readable format and refuse to start.
+      butEnv: { BUT_OUTPUT_FORMAT: "human" },
+      // Plans get pushed but never merged, so they are not outstanding work.
+      statusIgnoreBranches: ["plans"],
+      scanRoot: "C:\\git",
+    }
+  : {
+      shell: "bash",
+      shellArgs: ["-l"],
+      shellLabel: "bash",
+      butCommand: "but",
+      butArgs: ["tui"],
+      butEnv: { BUT_OUTPUT_FORMAT: "human" },
+      statusIgnoreBranches: ["plans"],
+      scanRoot: "~/git",
+    };
 
 let cached: Settings | null = null;
 

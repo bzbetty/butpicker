@@ -1,6 +1,6 @@
-# Tauri on Windows needs the MSVC toolchain. The windows-gnu toolchain builds
-# some of the dependency tree only if MinGW's dlltool.exe is on PATH, which it
-# generally isn't, so pin the project rather than rely on the machine default.
+# Pin the compiler version so every machine builds the same way. The channel is
+# deliberately host-agnostic: on Windows this resolves to the MSVC toolchain
+# (windows-gnu needs MinGW's dlltool.exe on PATH, which it generally isn't),
+# and on Linux/macOS to the native host triple.
 [toolchain]
-channel = "1.93-x86_64-pc-windows-msvc"
-targets = ["x86_64-pc-windows-msvc"]
+channel = "1.93"
