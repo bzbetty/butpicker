@@ -17,8 +17,8 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const ADO_RESOURCE: &str = "499b84ac-1321-427f-aa17-267ca6975798";
 /// az tokens last about an hour; refetch well before the edge.
 const TOKEN_TTL: Duration = Duration::from_secs(20 * 60);
-/// Tabs poll every six seconds. Builds do not move nearly that fast, and the
-/// answer costs a round trip to Azure, so serve a recent one from memory.
+/// Tabs poll as often as once a minute, and a new tab or focus change can ask
+/// sooner. The answer costs a round trip to Azure, so serve a recent one from memory.
 const BUILD_TTL: Duration = Duration::from_secs(60);
 /// Latest build per definition, so a repo with a handful of pipelines still
 /// answers in one request.

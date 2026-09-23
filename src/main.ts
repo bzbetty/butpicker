@@ -93,6 +93,7 @@ function closeProject(id: string): void {
   views.delete(id);
   statuses.delete(id);
   builds.delete(id);
+  lastPolled.delete(id);
   const index = order.indexOf(id);
   order = order.filter((x) => x !== id);
   renderTabs();
@@ -120,25 +121,47 @@ function cycleProject(direction: 1 | -1): void {
 const statuses = new Map<string, ProjectStatus>();
 const builds = new Map<string, BuildStatus>();
 let statusTimer: number | undefined;
+/** When each tab was last asked, so a tick only spawns for the ones that are due. */
+const lastPolled = new Map<string, number>();
+let polling = false;
+
+/** Background badges are the whole point: they're the only view of those repos. */
+const BACKGROUND_POLL_MS = 60_000;
+/** The active tab's TUI already shows its state, so its badge can lag. */
+const ACTIVE_POLL_MS = 5 * 60_000;
+/** How often to check what's due. Spawns nothing unless a tab is. */
+const POLL_TICK_MS = 15_000;
 
 /**
- * Polls `but status` and the Azure DevOps build for the open tabs. Only while
- * the window has focus — a background window spawning a process per project per
- * interval is rude. The build side answers from a minute-old cache in Rust, so
- * asking on the same six second timer costs nothing most of the time.
+ * Polls `but status` and the Azure DevOps build for the tabs that are due. Only
+ * while the window has focus — a background window spawning a process per
+ * project per interval is rude. `but status` takes around half a second, so a
+ * round is skipped if the last one hasn't come back rather than stacking up.
+ * The build side answers from a minute-old cache in Rust.
  */
 async function refreshStatuses(): Promise<void> {
-  if (!document.hasFocus() || views.size === 0) return;
+  if (polling || !document.hasFocus() || views.size === 0) return;
+  const now = Date.now();
+  const due = [...views.values()].filter((view) => {
+    const id = view.project.id;
+    const every = id === activeId ? ACTIVE_POLL_MS : BACKGROUND_POLL_MS;
+    return now - (lastPolled.get(id) ?? 0) >= every;
+  });
+  if (due.length === 0) return;
+  for (const view of due) lastPolled.set(view.project.id, now);
   const { butCommand, statusIgnoreBranches } = getSettings();
+  polling = true;
   const results = await Promise.all(
-    [...views.values()].map(async (view) => {
+    due.map(async (view) => {
       const [status, build] = await Promise.all([
         projectStatus(view.project.path, butCommand, statusIgnoreBranches).catch(() => null),
         buildStatus(view.project.path, projectSettingsFor(view.project.id).builds).catch(() => null),
       ]);
       return [view.project.id, status, build] as const;
     }),
-  );
+  ).finally(() => {
+    polling = false;
+  });
   let changed = false;
   for (const [id, status, build] of results) {
     if (status) {
@@ -170,7 +193,7 @@ async function refreshStatuses(): Promise<void> {
 function startStatusPolling(): void {
   clearInterval(statusTimer);
   void refreshStatuses();
-  statusTimer = setInterval(() => void refreshStatuses(), 6000);
+  statusTimer = setInterval(() => void refreshStatuses(), POLL_TICK_MS);
 }
 
 // Coming back to the window should put the caret back in the terminal you
@@ -619,6 +642,7 @@ function showProjectSettings(id: string): void {
       // Drop the old answer rather than leaving a badge that the new settings
       // no longer stand behind.
       builds.delete(id);
+      lastPolled.delete(id);
       renderTabs();
       await saveProjectSettings(id, next).catch(showFatal);
       await refreshStatuses();

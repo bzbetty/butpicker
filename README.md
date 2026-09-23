@@ -36,8 +36,10 @@ since the picker is for the ones you haven't got in front of you.
 
 ## Tab badges
 
-Each tab polls `but status --json` every six seconds (only while the window has
-focus) and shows what it finds:
+Each background tab polls `but status --json` once a minute, and the active tab
+every five (its TUI already shows the same thing). Polling only happens while
+the window has focus, and a round is skipped if the last one is still running.
+Each tab shows what it finds:
 
 | Badge | Meaning |
 | --- | --- |
@@ -78,8 +80,8 @@ Azure DevOps resource id), so there's no PAT to store anywhere. If `az login`
 has lapsed the badge turns into a muted `?` whose tooltip says so; clicking it
 opens the settings sheet, which spells out the last error in full.
 
-Answers are cached for a minute in the Rust side, so the six-second tab poll
-doesn't turn into a six-second Azure poll. Repository ids are cached for the
+Answers are cached for a minute in the Rust side, so a burst of tab polls
+doesn't turn into a burst of Azure calls. Repository ids are cached for the
 life of the process and the token for twenty minutes.
 
 ## Project settings
@@ -185,7 +187,7 @@ Open tabs and per-project settings are stored separately, in
   16KB read can land mid-escape-sequence; the frontend decodes to a
   `Uint8Array` and hands it straight to xterm.
 - `src-tauri/src/status.rs` — shells out to `but status --json` for the badges,
-  with `CREATE_NO_WINDOW` so polling doesn't flash a console every six seconds.
+  with `CREATE_NO_WINDOW` so polling doesn't flash a console every minute.
 - `src-tauri/src/builds.rs` — the Azure DevOps badge: parses the git remote for
   org/project/repo, borrows the az CLI's login for a bearer token, then asks the
   Git and Builds REST APIs. Token, repository ids and answers are all cached, so
