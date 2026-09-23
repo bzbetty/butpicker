@@ -679,6 +679,9 @@ window.addEventListener(
     if (e.shiftKey && e.code === "KeyT") {
       take();
       view?.addShell();
+    } else if (e.shiftKey && (e.code === "KeyD" || e.code === "KeyE")) {
+      take();
+      view?.splitActive(e.code === "KeyD" ? "x" : "y");
     } else if (e.shiftKey && e.code === "KeyW") {
       take();
       view?.closeActivePane();

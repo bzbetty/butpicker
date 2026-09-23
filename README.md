@@ -20,8 +20,10 @@ Replaces the "Windows Terminal with one tab per repo, plus a second pane for
 
 - The left pane runs `but tui`. It can't be closed, only restarted (`↻` or
   `Ctrl+Shift+R`). If `but` exits it says so and offers a restart.
-- The right side is a stack of shells, all started in the repository directory.
-  Add with `Ctrl+Shift+T`, close with `Ctrl+Shift+W`.
+- The right side starts with a shell, started in the repository directory. Any
+  pane, the TUI included, splits right (`◫`, `Ctrl+Shift+D`) or down (`⊟`,
+  `Ctrl+Shift+E`) into as many shells as you like. `Ctrl+Shift+T` adds one under
+  the focused shell; close with `×` or `Ctrl+Shift+W`.
 - Every divider drags.
 - Tabs drag to reorder.
 
@@ -122,7 +124,9 @@ Repositories that have since disappeared are skipped rather than erroring.
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+1`…`Ctrl+9` | Jump to tab by position |
 | `Ctrl+Shift+PageUp` / `PageDown` | Move the current tab left / right |
-| `Ctrl+Shift+T` | New terminal pane |
+| `Ctrl+Shift+T` | New terminal pane under the focused shell |
+| `Ctrl+Shift+D` | Split the focused pane right |
+| `Ctrl+Shift+E` | Split the focused pane down |
 | `Ctrl+Shift+W` | Close the focused terminal pane |
 | `Ctrl+Shift+R` | Restart the `but tui` pane |
 | `Ctrl+]` | Cycle focus between panes |

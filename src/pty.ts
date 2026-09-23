@@ -88,6 +88,7 @@ export class TerminalPane {
 
   onFocus?: (pane: TerminalPane) => void;
   onClose?: (pane: TerminalPane) => void;
+  onSplit?: (pane: TerminalPane, axis: "x" | "y") => void;
 
   constructor(spec: PaneSpec) {
     this.spec = spec;
@@ -102,6 +103,20 @@ export class TerminalPane {
     title.className = "pane-title";
     title.textContent = spec.label;
     header.appendChild(title);
+
+    const splitRight = document.createElement("button");
+    splitRight.className = "pane-btn";
+    splitRight.title = "Split right (Ctrl+Shift+D)";
+    splitRight.textContent = "◫";
+    splitRight.onclick = () => this.onSplit?.(this, "x");
+    header.appendChild(splitRight);
+
+    const splitDown = document.createElement("button");
+    splitDown.className = "pane-btn";
+    splitDown.title = "Split down (Ctrl+Shift+E)";
+    splitDown.textContent = "⊟";
+    splitDown.onclick = () => this.onSplit?.(this, "y");
+    header.appendChild(splitDown);
 
     const restart = document.createElement("button");
     restart.className = "pane-btn";
