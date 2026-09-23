@@ -140,7 +140,12 @@ export class TerminalPane {
     this.term.loadAddon(this.fitAddon);
     this.term.open(this.body);
     try {
-      this.term.loadAddon(new WebglAddon());
+      const webgl = new WebglAddon();
+      // WebView2 caps live WebGL contexts (~16) and drops the oldest once
+      // enough panes exist; a lost context renders garbage until disposed,
+      // after which xterm falls back to the DOM renderer.
+      webgl.onContextLoss(() => webgl.dispose());
+      this.term.loadAddon(webgl);
     } catch {
       // Falls back to the canvas/DOM renderer; nothing to do.
     }
@@ -188,6 +193,11 @@ export class TerminalPane {
     this.overlay.classList.add("hidden");
     this.fit();
     const { cols, rows } = this.term;
+    // Accept input before pty_spawn resolves: output starts flowing while we
+    // await, and ConPTY and TUIs query the terminal straight away. Dropping
+    // xterm's replies leaves them waiting on an answer that never comes. The
+    // backend registers the session before emitting anything.
+    this.running = true;
     try {
       await invoke("pty_spawn", {
         id,
@@ -201,13 +211,13 @@ export class TerminalPane {
       // A second restart may have landed while we awaited; don't revive a pty
       // this pane has already moved on from.
       if (this.ptyId === id) {
-        this.running = true;
         // Restarting the focused pane should leave you typing into it, not
         // into a terminal that no longer has the caret.
         if (this.element.classList.contains("active")) this.focus();
       }
     } catch (err) {
       if (this.ptyId === id) {
+        this.running = false;
         this.showOverlay(`Could not start ${this.spec.program}\n\n${err}`);
       }
     }
