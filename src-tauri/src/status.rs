@@ -59,10 +59,26 @@ fn but_command(program: &str, cwd: &Path) -> Command {
     cmd
 }
 
+/// `but status` takes seconds on a repo with pending changes. A plain sync
+/// command runs on the main thread, which also delivers pty output and input,
+/// so every poll froze every terminal until it came back.
+#[tauri::command]
+pub async fn project_status(
+    path: String,
+    program: String,
+    ignore_branches: Vec<String>,
+) -> ProjectStatus {
+    tauri::async_runtime::spawn_blocking(move || read_status(path, program, ignore_branches))
+        .await
+        .unwrap_or_else(|e| ProjectStatus {
+            error: Some(e.to_string()),
+            ..Default::default()
+        })
+}
+
 /// Branches that are pushed but never merged — plan notes and the like — don't
 /// represent outstanding work, so counting them just makes the badge noisy.
-#[tauri::command]
-pub fn project_status(path: String, program: String, ignore_branches: Vec<String>) -> ProjectStatus {
+fn read_status(path: String, program: String, ignore_branches: Vec<String>) -> ProjectStatus {
     let ignored: Vec<String> = ignore_branches.iter().map(|b| b.to_lowercase()).collect();
     let counts = |branches: &[ButBranch]| {
         branches

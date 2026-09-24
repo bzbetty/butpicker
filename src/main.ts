@@ -135,7 +135,7 @@ const POLL_TICK_MS = 15_000;
 /**
  * Polls `but status` and the Azure DevOps build for the tabs that are due. Only
  * while the window has focus — a background window spawning a process per
- * project per interval is rude. `but status` takes around half a second, so a
+ * project per interval is rude. `but status` can take several seconds, so a
  * round is skipped if the last one hasn't come back rather than stacking up.
  * The build side answers from a minute-old cache in Rust.
  */
