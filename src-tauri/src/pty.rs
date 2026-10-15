@@ -54,6 +54,10 @@ const AGENT_ENV_MARKERS: &[&str] = &[
     "AI_AGENT",
     "AGENT",
     "CI",
+    // Agent shells also set these, which turn every pane black and white and
+    // stop git from asking for credentials.
+    "NO_COLOR",
+    "GIT_TERMINAL_PROMPT",
 ];
 
 /// `async`, so Tauri runs it off the main thread: starting a ConPTY and its

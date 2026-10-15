@@ -29,8 +29,17 @@ export interface BuildConfig {
   branch: string | null;
 }
 
+/** What the run pane runs, and when. Every field is optional. */
+export interface RunConfig {
+  /** null is the default: a button when there's a command to run. */
+  mode: "auto" | "off" | null;
+  /** null uses whatever detection found, e.g. `aspire run` for an AppHost. */
+  command: string | null;
+}
+
 export interface ProjectSettings {
   builds: BuildConfig;
+  run: RunConfig;
 }
 
 export type BuildState =
@@ -67,6 +76,15 @@ export const emptyBuildConfig = (): BuildConfig => ({
   branch: null,
 });
 
+/** A running AppHost, as `aspire ps` describes it. */
+export interface RunningAppHost {
+  appHostPath: string;
+  dashboardUrl: string | null;
+  status: string | null;
+}
+
+export const emptyRunConfig = (): RunConfig => ({ mode: null, command: null });
+
 export const listProjects = (root: string) => invoke<Project[]>("projects_list", { root });
 export const projectStatus = (path: string, program: string, ignoreBranches: string[]) =>
   invoke<ProjectStatus>("project_status", { path, program, ignoreBranches });
@@ -76,6 +94,11 @@ export const projectSettingsAll = () =>
   invoke<Record<string, ProjectSettings>>("project_settings_all");
 export const saveProjectSettings = (id: string, settings: ProjectSettings) =>
   invoke<void>("project_settings_save", { id, settings });
+export const detectRun = (path: string) => invoke<string | null>("run_detect", { path });
+/** Keyed by whichever of `paths` has an AppHost running under it. */
+export const aspireRunning = (paths: string[]) =>
+  invoke<Record<string, RunningAppHost>>("aspire_running", { paths });
+export const aspireStop = (appHostPath: string) => invoke<void>("aspire_stop", { appHostPath });
 export const getSession = () => invoke<Session>("session_get");
 export const saveSession = (open: string[], active: string | null) =>
   invoke<void>("session_save", { open, active });

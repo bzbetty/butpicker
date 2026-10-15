@@ -1,4 +1,5 @@
 use crate::builds::BuildConfig;
+use crate::run::RunConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -33,6 +34,7 @@ pub struct Session {
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectSettings {
     pub builds: BuildConfig,
+    pub run: RunConfig,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -158,13 +160,16 @@ pub fn project_settings_save(
 
 fn is_default(settings: &ProjectSettings) -> bool {
     let builds = &settings.builds;
+    let run = &settings.run;
     builds.enabled.is_none()
+        && run.mode.is_none()
         && builds.definitions.is_empty()
         && [
             &builds.organization,
             &builds.project,
             &builds.repository,
             &builds.branch,
+            &run.command,
         ]
         .iter()
         .all(|value| value.as_deref().unwrap_or_default().trim().is_empty())

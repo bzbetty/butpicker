@@ -43,9 +43,16 @@ listen<{ id: string; data: string }>("pty:output", (e) => {
   registry.get(e.payload.id)?.write(decodeB64(e.payload.data));
 });
 
+/** Ptys asked to stop with Ctrl+C, each waiting to hear that it has. */
+const stopping = new Map<string, () => void>();
+
 listen<{ id: string; code: number }>("pty:exit", (e) => {
+  stopping.get(e.payload.id)?.();
   registry.get(e.payload.id)?.handleExit(e.payload.code);
 });
+
+/** How long an interrupted process gets to tidy up before it's killed. */
+const STOP_GRACE_MS = 10_000;
 
 /**
  * Ids must be unique across page loads, not just within one. A reloading dev
@@ -65,6 +72,12 @@ export interface PaneSpec {
   label: string;
   /** A pane the user can't close, e.g. the `but tui` pane. */
   pinned?: boolean;
+  /**
+   * Stop with Ctrl+C rather than a kill, for a process that has things of its
+   * own to shut down: `aspire run` stops its containers and services on an
+   * interrupt, which a kill gives it no chance to do.
+   */
+  interruptToStop?: boolean;
 }
 
 export class TerminalPane {
@@ -78,6 +91,7 @@ export class TerminalPane {
   readonly element: HTMLDivElement;
   readonly spec: PaneSpec;
 
+  private header: HTMLDivElement;
   private term: Terminal;
   private fitAddon: FitAddon;
   private body: HTMLDivElement;
@@ -86,6 +100,8 @@ export class TerminalPane {
   private running = false;
   private disposed = false;
 
+  /** Offered in place of Restart once the process exits. */
+  exitAction?: { label: string; run: () => void };
   onFocus?: (pane: TerminalPane) => void;
   onClose?: (pane: TerminalPane) => void;
   onSplit?: (pane: TerminalPane, axis: "x" | "y") => void;
@@ -96,7 +112,7 @@ export class TerminalPane {
     this.element = document.createElement("div");
     this.element.className = "pane";
 
-    const header = document.createElement("div");
+    const header = (this.header = document.createElement("div"));
     header.className = "pane-header";
 
     const title = document.createElement("span");
@@ -189,18 +205,51 @@ export class TerminalPane {
     this.observer.observe(this.body);
   }
 
-  /** Stops the current pty and, crucially, stops listening to it. */
-  private detach(): void {
-    if (!this.ptyId) return;
+  /**
+   * A button in the header, ahead of the split buttons, for whatever the view
+   * wants to hang off this pane.
+   */
+  addAction(glyph: string, title: string, onClick: () => void): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.className = "pane-btn";
+    button.title = title;
+    button.textContent = glyph;
+    button.onclick = onClick;
+    this.header.querySelector(".pane-title")!.after(button);
+    return button;
+  }
+
+  /**
+   * Stops the current pty and, crucially, stops listening to it. Resolves once
+   * it has gone, which for an interrupted process may be a few seconds.
+   */
+  private detach(): Promise<void> {
+    if (!this.ptyId) return Promise.resolve();
     const stale = this.ptyId;
+    const interrupt = this.spec.interruptToStop && this.running;
     this.ptyId = null;
     this.running = false;
     registry.delete(stale);
-    invoke("pty_kill", { id: stale }).catch(() => {});
+    const kill = () => invoke("pty_kill", { id: stale }).catch(() => {});
+    if (!interrupt) {
+      kill();
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        stopping.delete(stale);
+        kill();
+        resolve();
+      };
+      const timer = setTimeout(done, STOP_GRACE_MS);
+      stopping.set(stale, done);
+      invoke("pty_write", { id: stale, data: "\u0003" }).catch(done);
+    });
   }
 
   async start(): Promise<void> {
-    this.detach();
+    void this.detach();
     const id = `${session}-${nextId++}`;
     this.ptyId = id;
     registry.set(id, this);
@@ -239,6 +288,10 @@ export class TerminalPane {
   }
 
   async restart(): Promise<void> {
+    // Let the old process finish stopping first, so the new one doesn't find
+    // its ports still taken.
+    await this.detach();
+    if (this.disposed) return;
     this.term.reset();
     await this.start();
   }
@@ -249,11 +302,8 @@ export class TerminalPane {
 
   handleExit(code: number): void {
     this.running = false;
-    this.showOverlay(
-      `${this.spec.label} exited (code ${code})`,
-      "Restart",
-      () => void this.restart(),
-    );
+    const action = this.exitAction ?? { label: "Restart", run: () => void this.restart() };
+    this.showOverlay(`${this.spec.label} exited (code ${code})`, action.label, action.run);
   }
 
   private showOverlay(message: string, actionLabel?: string, action?: () => void): void {
@@ -294,7 +344,7 @@ export class TerminalPane {
     if (this.disposed) return;
     this.disposed = true;
     this.observer.disconnect();
-    this.detach();
+    void this.detach();
     this.term.dispose();
     this.element.remove();
   }

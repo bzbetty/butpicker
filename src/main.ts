@@ -5,8 +5,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  aspireRunning,
+  aspireStop,
   buildStatus,
+  detectRun,
   emptyBuildConfig,
+  emptyRunConfig,
   getSession,
   listProjects,
   matchesSubsequence,
@@ -19,9 +23,10 @@ import {
   type Project,
   type ProjectSettings,
   type ProjectStatus,
+  type RunningAppHost,
 } from "./projects";
 import { getSettings } from "./settings";
-import { ProjectView } from "./workspace";
+import { ProjectView, type RunSpec } from "./workspace";
 
 const tabsEl = document.getElementById("tabs") as HTMLDivElement;
 const viewsEl = document.getElementById("views") as HTMLDivElement;
@@ -58,6 +63,13 @@ async function openProject(project: Project): Promise<void> {
     return;
   }
   const view = new ProjectView(project);
+  // A click on ▶ should decide between running and attaching on what's true
+  // now, not on a poll from half a minute ago.
+  view.beforeRun = () => refreshAspire(0);
+  view.onStopAspire = async (appHostPath) => {
+    await aspireStop(appHostPath).catch(() => {});
+    await refreshAspire(0);
+  };
   view.element.classList.add("hidden");
   viewsEl.appendChild(view.element);
   views.set(project.id, view);
@@ -66,8 +78,14 @@ async function openProject(project: Project): Promise<void> {
   // Make it visible before starting, so the ptys get honest dimensions.
   activate(project.id);
   rememberSession();
+  const detecting = detectRun(project.path).catch(() => null);
   await view.start();
   view.fitAll();
+  detectedRun.set(project.id, await detecting);
+  view.configureRun(runSpecFor(project.id));
+  // Restore activates every tab in turn on the way through; only the one you
+  // end up looking at should get its run started.
+  if (activeId === project.id && !restoring) view.activated();
   void refreshStatuses();
 }
 
@@ -82,6 +100,8 @@ function activate(id: string): void {
   view.fitAll();
   view.active.focus();
   void getCurrentWindow().setTitle(`${view.project.name} — ButPicker`);
+  if (!restoring) view.activated();
+  void refreshAspire(ASPIRE_ACTIVATE_MS);
   renderTabs();
   rememberSession();
 }
@@ -94,6 +114,8 @@ function closeProject(id: string): void {
   statuses.delete(id);
   builds.delete(id);
   lastPolled.delete(id);
+  detectedRun.delete(id);
+  aspireState.delete(id);
   const index = order.indexOf(id);
   order = order.filter((x) => x !== id);
   renderTabs();
@@ -141,6 +163,7 @@ const POLL_TICK_MS = 15_000;
  */
 async function refreshStatuses(): Promise<void> {
   if (polling || !document.hasFocus() || views.size === 0) return;
+  void refreshAspire(ASPIRE_POLL_MS);
   const now = Date.now();
   const due = [...views.values()].filter((view) => {
     const id = view.project.id;
@@ -188,6 +211,49 @@ async function refreshStatuses(): Promise<void> {
     }
   }
   if (changed) renderTabs();
+}
+
+/** Each open project's running AppHost, where it has one. */
+const aspireState = new Map<string, RunningAppHost>();
+let aspireCheckedAt = 0;
+let aspireInFlight: Promise<void> | null = null;
+
+/** Running apps come and go with agents, so this polls faster than `but status`. */
+const ASPIRE_POLL_MS = 30_000;
+/** Switching to a tab is a good moment to check, but not on every Ctrl+Tab. */
+const ASPIRE_ACTIVATE_MS = 10_000;
+
+/**
+ * Asks `aspire ps` which open projects have an AppHost running, if the last
+ * answer is older than `maxAgeMs`. One call covers every tab, and it's only
+ * made at all when an open project has an AppHost.
+ */
+function refreshAspire(maxAgeMs: number): Promise<void> {
+  if (aspireInFlight) return aspireInFlight;
+  if (Date.now() - aspireCheckedAt < maxAgeMs) return Promise.resolve();
+  const ids = [...views.keys()].filter((id) => detectedRun.get(id));
+  if (ids.length === 0) return Promise.resolve();
+  const paths = ids.map((id) => views.get(id)!.project.path);
+  aspireInFlight = aspireRunning(paths)
+    .then((running) => {
+      aspireCheckedAt = Date.now();
+      let changed = false;
+      ids.forEach((id, i) => {
+        const next = running[paths[i]] ?? null;
+        const previous = aspireState.get(id) ?? null;
+        if (next) aspireState.set(id, next);
+        else aspireState.delete(id);
+        views.get(id)?.setAspire(next);
+        if (previous?.dashboardUrl !== next?.dashboardUrl || !previous !== !next) changed = true;
+      });
+      if (changed) renderTabs();
+    })
+    // No aspire CLI, or it failed: leave the last answer standing.
+    .catch(() => {})
+    .finally(() => {
+      aspireInFlight = null;
+    });
+  return aspireInFlight;
 }
 
 function startStatusPolling(): void {
@@ -295,6 +361,21 @@ function statusBadges(id: string): HTMLElement | null {
       `${status.branches} applied branch${status.branches === 1 ? "" : "es"}` +
       ` across ${status.stacks} stack${status.stacks === 1 ? "" : "s"}`;
     wrap.appendChild(branches);
+  }
+  const aspire = aspireState.get(id);
+  if (aspire) {
+    const running = document.createElement("span");
+    running.className = "badge aspire";
+    running.textContent = "◆";
+    running.title = aspire.dashboardUrl
+      ? `Aspire is running · ${aspire.dashboardUrl}\nClick for the dashboard`
+      : "Aspire is running";
+    running.addEventListener("pointerdown", (e) => e.stopPropagation());
+    running.onclick = (e) => {
+      e.stopPropagation();
+      if (aspire.dashboardUrl) void openUrl(aspire.dashboardUrl);
+    };
+    wrap.appendChild(running);
   }
   const build = buildBadge(id);
   if (build) wrap.appendChild(build);
@@ -532,7 +613,23 @@ async function showProjectPicker(): Promise<void> {
 const projectSettings = new Map<string, ProjectSettings>();
 
 function projectSettingsFor(id: string): ProjectSettings {
-  return projectSettings.get(id) ?? { builds: emptyBuildConfig() };
+  const stored = projectSettings.get(id);
+  return {
+    builds: stored?.builds ?? emptyBuildConfig(),
+    // Settings saved before the run pane existed have no `run` at all.
+    run: stored?.run ?? emptyRunConfig(),
+  };
+}
+
+/** What each open project would run with no command of its own: `aspire run` for an AppHost. */
+const detectedRun = new Map<string, string | null>();
+
+/** The run pane's command for a project, or null when it has no ▶ button. */
+function runSpecFor(id: string): RunSpec | null {
+  const { mode, command } = projectSettingsFor(id).run;
+  if (mode === "off") return null;
+  const resolved = command ?? detectedRun.get(id) ?? null;
+  return resolved ? { command: resolved, auto: mode === "auto" } : null;
 }
 
 /** A blank field means "not set", rather than "set to empty". */
@@ -552,6 +649,8 @@ function showProjectSettings(id: string): void {
   const view = views.get(id);
   if (!view) return;
   const current = projectSettingsFor(id).builds;
+  const currentRun = projectSettingsFor(id).run;
+  const detectedCommand = detectedRun.get(id) ?? null;
   const build = builds.get(id);
   // `org / project / repo` as the poll resolved it, so the override boxes can
   // show what they'd be overriding.
@@ -584,18 +683,40 @@ function showProjectSettings(id: string): void {
       return el;
     };
 
-    const mode = document.createElement("select");
-    mode.className = "form-input";
-    for (const [value, label] of [
+    const select = (options: string[][]): HTMLSelectElement => {
+      const el = document.createElement("select");
+      el.className = "form-input";
+      for (const [value, label] of options) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        el.appendChild(option);
+      }
+      return el;
+    };
+
+    const runMode = select([
+      ["button", "A ▶ button on the TUI"],
+      ["auto", "Start when the tab opens"],
+      ["off", "Off"],
+    ]);
+    runMode.value = currentRun.mode ?? "button";
+    const runCommand = textbox(currentRun.command, detectedCommand ?? "e.g. npm run dev");
+
+    field(
+      "Run",
+      detectedCommand
+        ? "Found an Aspire AppHost. Runs in a pane on the right."
+        : "A long-running command, in a pane on the right.",
+      runMode,
+    );
+    field("Run command", "Through your shell. Blank uses what was detected.", runCommand);
+
+    const mode = select([
       ["auto", "Auto — on when the remote is Azure DevOps"],
       ["on", "Always on"],
       ["off", "Off"],
-    ]) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      mode.appendChild(option);
-    }
+    ]);
     mode.value = current.enabled === null ? "auto" : current.enabled ? "on" : "off";
 
     const organization = textbox(current.organization, detected[0] || "from the remote");
@@ -636,9 +757,16 @@ function showProjectSettings(id: string): void {
             .filter((n) => Number.isInteger(n) && n > 0),
           branch: trimmed(branch.value),
         },
+        run: {
+          // A button is the default, so it's stored as no choice at all.
+          mode: runMode.value === "button" ? null : (runMode.value as "auto" | "off"),
+          command: trimmed(runCommand.value),
+        },
       };
       projectSettings.set(id, next);
       closeModal();
+      view.configureRun(runSpecFor(id));
+      if (id === activeId) view.activated();
       // Drop the old answer rather than leaving a badge that the new settings
       // no longer stand behind.
       builds.delete(id);
@@ -654,7 +782,7 @@ function showProjectSettings(id: string): void {
     actions.append(save, cancel);
     body.appendChild(actions);
 
-    setTimeout(() => mode.focus(), 0);
+    setTimeout(() => runMode.focus(), 0);
   }, `${view.project.name} settings`);
 }
 
@@ -685,6 +813,9 @@ window.addEventListener(
     } else if (e.shiftKey && e.code === "KeyW") {
       take();
       view?.closeActivePane();
+    } else if (!e.shiftKey && e.code === "F5") {
+      take();
+      void view?.openRun();
     } else if (e.shiftKey && e.code === "KeyR") {
       take();
       void view?.tui.restart();
@@ -769,6 +900,8 @@ async function restoreSession(projects: Project[]): Promise<number> {
     restoring = false;
   }
   if (session.active && views.has(session.active)) activate(session.active);
+  // Whichever tab restore left in front gets the start it was held back from.
+  currentView()?.activated();
   return views.size;
 }
 

@@ -67,3 +67,14 @@ export function saveSettings(patch: Partial<Settings>): Settings {
 }
 
 export const SETTINGS_DEFAULTS = DEFAULTS;
+
+/**
+ * Arguments that make `shell` run one command line and exit, so a run command
+ * gets the shell's PATH, quoting and aliases rather than a naive split.
+ */
+export function shellCommandArgs(shell: string, command: string): string[] {
+  const name = shell.toLowerCase().replace(/^.*[\\/]/, "").replace(/\.exe$/, "");
+  if (name === "cmd") return ["/c", command];
+  if (name === "pwsh" || name === "powershell") return ["-NoLogo", "-Command", command];
+  return ["-c", command];
+}

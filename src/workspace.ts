@@ -1,6 +1,7 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { TerminalPane, type PaneSpec } from "./pty";
-import type { Project } from "./projects";
-import { getSettings } from "./settings";
+import type { Project, RunningAppHost } from "./projects";
+import { getSettings, shellCommandArgs } from "./settings";
 
 export type Axis = "x" | "y";
 
@@ -54,6 +55,13 @@ const TUI_SHARE = 0.75;
 
 type LayoutNode = Split | TerminalPane;
 
+/** What the run pane runs, and whether it starts on its own. */
+export interface RunSpec {
+  command: string;
+  /** Start when the tab is first looked at, rather than on the ▶ button. */
+  auto: boolean;
+}
+
 /**
  * A row (`x`) or column (`y`) of panes and nested splits, with a gutter
  * between each pair. Each child's share lives in its own `flex-grow`.
@@ -102,6 +110,26 @@ export class ProjectView {
   private parents = new Map<TerminalPane, Split>();
   private butPane: TerminalPane;
   private activePane: TerminalPane;
+  private run: RunSpec | null = null;
+  private runPane: TerminalPane | null = null;
+  private runButton: HTMLButtonElement;
+  /** The run pane's dashboard button, shown once there's a URL for it. */
+  private dashboardButton: HTMLButtonElement | null = null;
+  /** This project's AppHost, if `aspire ps` last saw one running. */
+  private aspire: RunningAppHost | null = null;
+  /** An auto run starts once per tab, not every time the tab comes back. */
+  private autoRan = false;
+  /**
+   * What an attached pane follows: resource states, a line per change, or
+   * every resource's console output, which on a chatty app is a firehose.
+   */
+  private attachView: "describe" | "logs" = "describe";
+  /** Set while deciding between running and attaching, so a double click opens one pane. */
+  private opening = false;
+
+  /** Brings `aspire` up to date before the run pane decides what to start. */
+  beforeRun?: () => Promise<void>;
+  onStopAspire?: (appHostPath: string) => Promise<void>;
 
   constructor(project: Project) {
     this.project = project;
@@ -119,6 +147,8 @@ export class ProjectView {
       label: `but tui — ${project.name}`,
       pinned: true,
     });
+    this.runButton = this.butPane.addAction("▶", "", () => void this.openRun());
+    this.runButton.classList.add("pane-run", "hidden");
     this.root.children.push(this.butPane);
     this.parents.set(this.butPane, this.root);
 
@@ -138,26 +168,152 @@ export class ProjectView {
   /** Starts every pty. Called once the view is attached and has real dimensions. */
   async start(): Promise<void> {
     await this.butPane.start();
-    await Promise.all(this.shells().map((s) => s.start()));
+    await Promise.all(this.shells().filter((s) => s !== this.runPane).map((s) => s.start()));
   }
 
   /**
-   * Opens a shell beside `target`, taking `share` of the room it had. Splitting
-   * along the axis the pane already sits in adds a sibling; across it, the pane
-   * becomes a nested split of its own.
+   * What the ▶ button runs, or null for no button. A run pane already open
+   * keeps running what it was started with until it's restarted from here.
+   */
+  configureRun(run: RunSpec | null): void {
+    this.run = run;
+    this.runButton.classList.toggle("hidden", !run);
+    this.updateRunControls();
+  }
+
+  /** What `aspire ps` makes of this project: its AppHost, or null when it's not running. */
+  setAspire(running: RunningAppHost | null): void {
+    this.aspire = running;
+    this.updateRunControls();
+  }
+
+  private updateRunControls(): void {
+    this.dashboardButton?.classList.toggle("hidden", !this.aspire?.dashboardUrl);
+    if (!this.run) return;
+    this.runButton.title = this.runPane
+      ? `Go to ${this.runPane.spec.label} (Ctrl+F5)`
+      : this.aspire
+        ? "Already running — attach to it (Ctrl+F5)"
+        : `Run ${this.run.command} (Ctrl+F5)`;
+  }
+
+  /** The tab has come into view, other than during session restore. */
+  activated(): void {
+    if (!this.run?.auto || this.autoRan) return;
+    this.autoRan = true;
+    if (!this.runPane) void this.openRun({ focus: false });
+  }
+
+  /**
+   * Opens the run pane: under the first shell if there is one, so the TUI
+   * keeps its column, otherwise beside the TUI. With the pane already open,
+   * this just goes to it.
+   *
+   * If the AppHost is already running — an agent's `aspire start`, say — a
+   * second copy would only fight it for ports, so the pane follows the
+   * running one instead. `attach` forces the choice either way.
+   */
+  async openRun({ focus = true, attach }: { focus?: boolean; attach?: boolean } = {}): Promise<void> {
+    if (!this.run || this.opening) return;
+    if (this.runPane) {
+      this.setActivePane(this.runPane);
+      this.runPane.focus();
+      return;
+    }
+    if (attach === undefined) {
+      this.opening = true;
+      try {
+        await this.beforeRun?.();
+      } finally {
+        this.opening = false;
+      }
+      if (!this.run || this.runPane) return;
+      attach = this.aspire !== null;
+    }
+    const target = attach ? this.aspire : null;
+
+    const settings = getSettings();
+    const apphost = `--apphost "${target?.appHostPath}"`;
+    const logs = this.attachView === "logs";
+    const command = !target
+      ? this.run.command
+      : logs
+        ? `aspire logs ${apphost} --follow --tail 200`
+        : `aspire describe ${apphost} --follow`;
+    const spec: PaneSpec = {
+      cwd: this.project.path,
+      program: settings.shell,
+      args: shellCommandArgs(settings.shell, command),
+      label: !target ? this.run.command : logs ? "aspire logs (attached)" : "aspire (attached)",
+      // Ctrl+C on the logs only stops watching, but on a run it's how the app
+      // gets to shut down cleanly.
+      interruptToStop: !target,
+    };
+    const shell = this.shells()[0];
+    const pane = shell
+      ? this.split(shell, "y", { spec, focus })
+      : this.split(this.butPane, "x", { spec, focus, share: 1 - TUI_SHARE });
+    this.runPane = pane;
+
+    if (target) {
+      pane.addAction("■", "Stop the app (aspire stop)", () => {
+        void this.onStopAspire?.(target.appHostPath);
+      });
+      pane.addAction(
+        logs ? "☷" : "≡",
+        logs ? "Show resource states instead" : "Show every resource's logs instead",
+        () => this.reattach(logs ? "describe" : "logs"),
+      );
+      // The stream ends when the app does, and then there's nothing to attach to.
+      pane.exitAction = { label: "Run here", run: () => this.runHere() };
+    }
+    this.dashboardButton = pane.addAction("◉", "Open the Aspire dashboard", () => {
+      if (this.aspire?.dashboardUrl) void openUrl(this.aspire.dashboardUrl);
+    });
+    this.updateRunControls();
+  }
+
+  /** Swaps what an attached pane follows. */
+  private reattach(view: "describe" | "logs"): void {
+    // With nothing running any more, reopening would start a run instead.
+    if (!this.aspire) return;
+    this.attachView = view;
+    if (this.runPane) this.closeShell(this.runPane);
+    void this.openRun({ attach: true });
+  }
+
+  /** Swaps an attached pane, whose app has stopped, for one that runs it. */
+  private runHere(): void {
+    if (this.runPane) this.closeShell(this.runPane);
+    this.aspire = null;
+    void this.openRun({ attach: false });
+  }
+
+  /**
+   * Opens a pane beside `target`, taking `share` of the room it had: a shell
+   * unless `spec` says otherwise. Splitting along the axis the pane already
+   * sits in adds a sibling; across it, the pane becomes a nested split of its
+   * own.
    */
   split(
     target: TerminalPane,
     axis: Axis,
-    { autostart = true, share = 0.5 }: { autostart?: boolean; share?: number } = {},
+    {
+      autostart = true,
+      focus = true,
+      share = 0.5,
+      spec,
+    }: { autostart?: boolean; focus?: boolean; share?: number; spec?: PaneSpec } = {},
   ): TerminalPane {
     const settings = getSettings();
-    const pane = this.makePane({
-      cwd: this.project.path,
-      program: settings.shell,
-      args: settings.shellArgs,
-      label: settings.shellLabel,
-    });
+    const pane = this.makePane(
+      spec ?? {
+        cwd: this.project.path,
+        program: settings.shell,
+        args: settings.shellArgs,
+        label: settings.shellLabel,
+      },
+    );
 
     const parent = this.parents.get(target)!;
     if (parent.axis === axis || parent.children.length === 1) {
@@ -184,6 +340,7 @@ export class ProjectView {
 
     if (autostart) {
       void pane.start().then(() => {
+        if (!focus) return;
         this.setActivePane(pane);
         pane.focus();
       });
@@ -214,6 +371,11 @@ export class ProjectView {
     parent.children.splice(index, 1);
     this.parents.delete(pane);
     pane.dispose();
+    if (pane === this.runPane) {
+      this.runPane = null;
+      this.dashboardButton = null;
+      this.updateRunControls();
+    }
     this.collapse(parent);
 
     // The TUI is always there, so there's always somewhere for focus to land.

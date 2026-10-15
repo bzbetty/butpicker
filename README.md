@@ -27,6 +27,38 @@ Replaces the "Windows Terminal with one tab per repo, plus a second pane for
 - Every divider drags.
 - Tabs drag to reorder.
 
+## Run pane
+
+A repository with an Aspire AppHost gets a green `▶` in its TUI header. Click
+it, or press `Ctrl+F5`, and `aspire run` starts in a pane under the first shell.
+After that, the same button goes to that pane. Detection looks three folders
+deep for `*.AppHost.csproj`, `apphost.cs`, `apphost.ts`, or a project using
+`Aspire.AppHost.Sdk`. It skips `bin`, `obj` and `node_modules`.
+
+The project settings sheet decides what runs and when. The command can be
+anything long-running (`npm run dev`, `docker compose up`), and it runs through
+your shell. **Start when the tab opens** starts it the first time you look at
+the tab, not when the tab is restored. Otherwise, launching with a dozen tabs
+open would boot a dozen apps.
+
+Closing or restarting the pane sends Ctrl+C first and waits up to ten seconds
+before killing it, so Aspire gets the chance to stop its containers.
+
+If the AppHost is already running when you press `▶`, for example from an
+agent's `aspire start`, the pane doesn't start a second copy. A detached
+process has no console left to attach to, so the pane follows
+`aspire describe --follow` instead: one line per resource, then one per state
+change. `≡` switches to `aspire logs --follow` for every resource's output.
+That's a firehose on a chatty app, and `☷` switches back. `■` runs
+`aspire stop`. Closing the pane stops watching but leaves the app running. When the app exits,
+the overlay offers **Run here**.
+
+Every 30 seconds, while the window has focus, one `aspire ps` call checks every
+open AppHost. It also runs when you switch tabs or press `▶`. A running app
+puts a purple `◆` on its tab. Click it, or `◉` in the run pane, to open the
+dashboard. Paths are resolved before they're compared, so a repo opened through
+a junction still matches the real path that `aspire ps` reports.
+
 ## Opening a repository
 
 `Ctrl+T` lists every git repository directly under your git root (`C:\git` by
@@ -93,6 +125,8 @@ Some settings belong to one repository rather than to the app. Right-click a tab
 
 | Setting | Default | What it's for |
 | --- | --- | --- |
+| Run | A ▶ button | `Start when the tab opens`, or `Off` to hide the button. |
+| Run command | detected | What the run pane runs. Blank uses `aspire run` when there's an AppHost. |
 | Build badge | Auto | Auto shows the badge when the remote is Azure DevOps. `Off` silences a repo whose pipeline you don't care about; `Always on` is for one where the coordinates are filled in by hand. |
 | Organisation / Project / Repository | from the remote | Overrides for a repo whose remote doesn't spell them out, or whose Azure repo is named differently from the folder. |
 | Pipelines | every pipeline building the repo | Definition ids, comma separated, when you'd rather pin them. |
@@ -129,6 +163,7 @@ Repositories that have since disappeared are skipped rather than erroring.
 | `Ctrl+Shift+E` | Split the focused pane down |
 | `Ctrl+Shift+W` | Close the focused terminal pane |
 | `Ctrl+Shift+R` | Restart the `but tui` pane |
+| `Ctrl+F5` | Start the run pane, or go to it |
 | `Ctrl+]` | Cycle focus between panes |
 
 Everything else goes straight to the pty, so `but`'s own keys and `Ctrl+C` in a

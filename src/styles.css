@@ -273,6 +273,14 @@ body.resizing-y * {
   color: var(--text);
 }
 
+/* The one header button worth seeing from across the room: it's how the app
+   gets started. */
+.pane-btn.pane-run {
+  color: #3fb950;
+  font-size: 12px;
+  opacity: 1;
+}
+
 .pane-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -587,7 +595,18 @@ body.resizing-y * {
   color: #79c0ff;
 }
 
-/* The build badge is the only one you can click, so it says so on hover. */
+/* A running app. Clicks through to its dashboard. */
+.badge.aspire {
+  cursor: pointer;
+  background: #8957e526;
+  color: #d2a8ff;
+}
+
+.badge.aspire:hover {
+  filter: brightness(1.3);
+}
+
+/* The build badge says it's clickable on hover. */
 .badge.build {
   min-width: 18px;
   justify-content: center;

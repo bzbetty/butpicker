@@ -1,6 +1,7 @@
 mod builds;
 mod projects;
 mod pty;
+mod run;
 mod status;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -22,6 +23,9 @@ pub fn run() {
             projects::project_settings_save,
             status::project_status,
             builds::build_status,
+            run::run_detect,
+            run::aspire_running,
+            run::aspire_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
