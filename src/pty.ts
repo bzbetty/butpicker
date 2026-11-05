@@ -91,7 +91,13 @@ export class TerminalPane {
   readonly element: HTMLDivElement;
   readonly spec: PaneSpec;
 
-  private header: HTMLDivElement;
+  /**
+   * This pane's tab, for the group header to show: its label and, unless
+   * pinned, a close button.
+   */
+  readonly tab: HTMLDivElement;
+  /** Buttons for this pane alone, shown in the group header while it's the selected tab. */
+  readonly actions: HTMLDivElement;
   private term: Terminal;
   private fitAddon: FitAddon;
   private body: HTMLDivElement;
@@ -104,7 +110,6 @@ export class TerminalPane {
   exitAction?: { label: string; run: () => void };
   onFocus?: (pane: TerminalPane) => void;
   onClose?: (pane: TerminalPane) => void;
-  onSplit?: (pane: TerminalPane, axis: "x" | "y") => void;
 
   constructor(spec: PaneSpec) {
     this.spec = spec;
@@ -112,43 +117,42 @@ export class TerminalPane {
     this.element = document.createElement("div");
     this.element.className = "pane";
 
-    const header = (this.header = document.createElement("div"));
-    header.className = "pane-header";
-
+    this.tab = document.createElement("div");
+    this.tab.className = "pane-tab";
+    this.tab.title = spec.label;
     const title = document.createElement("span");
     title.className = "pane-title";
     title.textContent = spec.label;
-    header.appendChild(title);
+    this.tab.appendChild(title);
+    this.tab.addEventListener("mousedown", (e) => {
+      // Middle-click closes, as tabs do everywhere else.
+      if (e.button === 1 && !spec.pinned) {
+        e.preventDefault();
+        this.onClose?.(this);
+        return;
+      }
+      this.onFocus?.(this);
+      // Let the click land, then hand the keyboard to the terminal.
+      requestAnimationFrame(() => this.focus());
+    });
+    if (!spec.pinned) {
+      const close = document.createElement("button");
+      close.className = "tab-close";
+      close.title = "Close (Ctrl+Shift+W)";
+      close.textContent = "×";
+      close.onmousedown = (e) => e.stopPropagation();
+      close.onclick = () => this.onClose?.(this);
+      this.tab.appendChild(close);
+    }
 
-    const splitRight = document.createElement("button");
-    splitRight.className = "pane-btn";
-    splitRight.title = "Split right (Ctrl+Shift+D)";
-    splitRight.textContent = "◫";
-    splitRight.onclick = () => this.onSplit?.(this, "x");
-    header.appendChild(splitRight);
-
-    const splitDown = document.createElement("button");
-    splitDown.className = "pane-btn";
-    splitDown.title = "Split down (Ctrl+Shift+E)";
-    splitDown.textContent = "⊟";
-    splitDown.onclick = () => this.onSplit?.(this, "y");
-    header.appendChild(splitDown);
-
+    this.actions = document.createElement("div");
+    this.actions.className = "pane-actions";
     const restart = document.createElement("button");
     restart.className = "pane-btn";
     restart.title = "Restart";
     restart.textContent = "↻";
     restart.onclick = () => this.restart();
-    header.appendChild(restart);
-
-    if (!spec.pinned) {
-      const close = document.createElement("button");
-      close.className = "pane-btn";
-      close.title = "Close pane";
-      close.textContent = "×";
-      close.onclick = () => this.onClose?.(this);
-      header.appendChild(close);
-    }
+    this.actions.appendChild(restart);
 
     this.body = document.createElement("div");
     this.body.className = "pane-body";
@@ -156,7 +160,7 @@ export class TerminalPane {
     this.overlay = document.createElement("div");
     this.overlay.className = "pane-overlay hidden";
 
-    this.element.append(header, this.body, this.overlay);
+    this.element.append(this.body, this.overlay);
 
     this.term = new Terminal({
       fontFamily: '"Cascadia Mono", "Consolas", "Fira Code", monospace',
@@ -206,8 +210,8 @@ export class TerminalPane {
   }
 
   /**
-   * A button in the header, ahead of the split buttons, for whatever the view
-   * wants to hang off this pane.
+   * A button in the header, ahead of restart, for whatever the view wants to
+   * hang off this pane.
    */
   addAction(glyph: string, title: string, onClick: () => void): HTMLButtonElement {
     const button = document.createElement("button");
@@ -215,7 +219,7 @@ export class TerminalPane {
     button.title = title;
     button.textContent = glyph;
     button.onclick = onClick;
-    this.header.querySelector(".pane-title")!.after(button);
+    this.actions.prepend(button);
     return button;
   }
 
@@ -347,5 +351,7 @@ export class TerminalPane {
     void this.detach();
     this.term.dispose();
     this.element.remove();
+    this.tab.remove();
+    this.actions.remove();
   }
 }

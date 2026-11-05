@@ -214,13 +214,28 @@ body.resizing-y * {
   cursor: row-resize !important;
 }
 
-.pane {
-  position: relative;
+/* A layout leaf: a header of tabs over one or more panes, one shown at a time. */
+.pane-group {
   display: flex;
   flex-direction: column;
   flex-basis: 0;
   min-width: 0;
   min-height: 0;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.pane-group-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
   background: var(--bg);
   overflow: hidden;
 }
@@ -231,16 +246,69 @@ body.resizing-y * {
   gap: 4px;
   height: var(--header-h);
   flex: 0 0 var(--header-h);
-  padding: 0 6px 0 12px;
+  padding: 0 6px 0 0;
   background: var(--bg-raised);
   border-bottom: 1px solid var(--border);
   color: var(--text-dim);
   font-size: 11.5px;
 }
 
-.pane.active .pane-header {
+.pane-group.active .pane-header {
   color: var(--text);
   box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.pane-tabs {
+  display: flex;
+  align-self: stretch;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pane-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.pane-tab {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 70px;
+  max-width: 260px;
+  padding: 0 4px 0 12px;
+  border-right: 1px solid var(--border);
+  border-top: 2px solid transparent;
+  cursor: default;
+}
+
+.pane-tab:hover {
+  background: #1c2129;
+}
+
+.pane-group.active .pane-tab.selected {
+  border-top-color: var(--accent);
+}
+
+.pane-tab.selected {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* One tab reads as the pane's title, as before tabs: no tab chrome, and it
+   takes the width. */
+.pane-group.single .pane-tab {
+  flex: 1 1 auto;
+  max-width: none;
+  background: transparent;
+  border-right: 0;
+  border-top-color: transparent !important;
+}
+
+.pane-group.single .pane-tab:hover {
+  background: transparent;
 }
 
 .pane-title {
@@ -248,6 +316,36 @@ body.resizing-y * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tab-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.pane-tab:hover .tab-close,
+.pane-tab.selected .tab-close {
+  opacity: 0.6;
+}
+
+.tab-close:hover {
+  opacity: 1 !important;
+  background: #30363d;
+  color: var(--text);
+}
+
+.pane-group-actions,
+.pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* Faint rather than invisible: a control you can't see is a control you don't
@@ -264,7 +362,7 @@ body.resizing-y * {
   opacity: 0.45;
 }
 
-.pane:hover .pane-btn {
+.pane-group:hover .pane-btn {
   opacity: 1;
 }
 
@@ -273,11 +371,52 @@ body.resizing-y * {
   color: var(--text);
 }
 
+.pane-btn.pane-add {
+  font-size: 17px;
+}
+
 /* The one header button worth seeing from across the room: it's how the app
    gets started. */
 .pane-btn.pane-run {
   color: #3fb950;
   font-size: 12px;
+  opacity: 1;
+}
+
+/* The ＋ menu: a profile per row, a place per column. */
+.add-menu {
+  position: fixed;
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px #0008;
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.add-menu-row {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) repeat(3, 40px);
+  align-items: center;
+  justify-items: center;
+}
+
+.add-menu-head {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  padding-bottom: 2px;
+}
+
+.add-menu-name {
+  justify-self: start;
+  padding: 0 10px 0 4px;
+}
+
+.add-menu .pane-btn {
   opacity: 1;
 }
 
@@ -319,7 +458,7 @@ body.resizing-y * {
 
 .pane-overlay {
   position: absolute;
-  inset: var(--header-h) 0 0 0;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;

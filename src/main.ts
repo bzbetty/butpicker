@@ -795,24 +795,30 @@ function currentView(): ProjectView | null {
 window.addEventListener(
   "keydown",
   (e) => {
-    const ctrl = e.ctrlKey && !e.altKey;
-    if (!ctrl) return;
-
+    // AltGr arrives as Ctrl+Alt on Windows; it's typing, not a shortcut.
+    if (!e.ctrlKey || e.getModifierState("AltGraph")) return;
     const view = currentView();
     const take = () => {
       e.preventDefault();
       e.stopPropagation();
     };
 
-    if (e.shiftKey && e.code === "KeyT") {
+    // New terminals: T a tab, D right, E down. Alt makes it the second
+    // profile (claude) rather than the shell.
+    const place = ({ KeyT: "tab", KeyD: "x", KeyE: "y" } as const)[e.code as "KeyT" | "KeyD" | "KeyE"];
+    if (e.shiftKey && place) {
       take();
-      view?.addShell();
-    } else if (e.shiftKey && (e.code === "KeyD" || e.code === "KeyE")) {
-      take();
-      view?.splitActive(e.code === "KeyD" ? "x" : "y");
-    } else if (e.shiftKey && e.code === "KeyW") {
+      view?.newTerminal(place, e.altKey ? 1 : 0);
+      return;
+    }
+    if (e.altKey) return;
+
+    if (e.shiftKey && e.code === "KeyW") {
       take();
       view?.closeActivePane();
+    } else if (!e.shiftKey && (e.code === "PageUp" || e.code === "PageDown")) {
+      take();
+      view?.cycleTab(e.code === "PageDown" ? 1 : -1);
     } else if (!e.shiftKey && e.code === "F5") {
       take();
       void view?.openRun();

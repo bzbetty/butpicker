@@ -1,9 +1,12 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { TerminalPane, type PaneSpec } from "./pty";
 import type { Project, RunningAppHost } from "./projects";
-import { getSettings, shellCommandArgs } from "./settings";
+import { getSettings, shellCommandArgs, shellThenCommandArgs, type Profile } from "./settings";
 
 export type Axis = "x" | "y";
+
+/** Where a new terminal goes: a tab beside the pane, or a split right or down of it. */
+export type Placement = "tab" | Axis;
 
 /**
  * Makes a gutter drag-resize its two neighbours by trading flex-grow between
@@ -53,7 +56,7 @@ function setGrow(el: HTMLElement, value: number): void {
  */
 const TUI_SHARE = 0.75;
 
-type LayoutNode = Split | TerminalPane;
+type LayoutNode = Split | TabGroup;
 
 /** What the run pane runs, and whether it starts on its own. */
 export interface RunSpec {
@@ -98,6 +101,158 @@ class Split {
 }
 
 /**
+ * A leaf of the layout: one or more panes as tabs, one shown at a time. The
+ * header is the tab strip, then the shown pane's own buttons, then ＋ for a
+ * new terminal here.
+ */
+class TabGroup {
+  panes: TerminalPane[] = [];
+  selected: TerminalPane | null = null;
+  parent!: Split;
+  readonly element: HTMLDivElement;
+  private tabs: HTMLDivElement;
+  private actions: HTMLDivElement;
+  private body: HTMLDivElement;
+
+  constructor(onAdd: (group: TabGroup, anchor: HTMLElement) => void) {
+    this.element = document.createElement("div");
+    this.element.className = "pane-group";
+
+    const header = document.createElement("div");
+    header.className = "pane-header";
+    this.tabs = document.createElement("div");
+    this.tabs.className = "pane-tabs";
+    // A wheel over a crowded strip scrolls it sideways, as there's no other way along.
+    this.tabs.addEventListener("wheel", (e) => {
+      if (e.deltaY === 0) return;
+      e.preventDefault();
+      this.tabs.scrollLeft += e.deltaY;
+    });
+    this.actions = document.createElement("div");
+    this.actions.className = "pane-group-actions";
+    const add = document.createElement("button");
+    add.className = "pane-btn pane-add";
+    add.title = "New terminal: tab, right or down";
+    add.textContent = "+";
+    add.onclick = () => onAdd(this, add);
+    header.append(this.tabs, this.actions, add);
+
+    this.body = document.createElement("div");
+    this.body.className = "pane-group-body";
+    this.element.append(header, this.body);
+  }
+
+  insert(pane: TerminalPane, after?: TerminalPane): void {
+    const index = after ? this.panes.indexOf(after) + 1 : this.panes.length;
+    this.panes.splice(index, 0, pane);
+    this.tabs.insertBefore(pane.tab, this.tabs.children[index] ?? null);
+    this.actions.appendChild(pane.actions);
+    this.body.appendChild(pane.element);
+    this.element.classList.toggle("single", this.panes.length === 1);
+    this.select(pane);
+  }
+
+  /** Takes `pane` out, selecting its neighbour if it was showing. Returns that neighbour. */
+  remove(pane: TerminalPane): TerminalPane | null {
+    const index = this.panes.indexOf(pane);
+    this.panes.splice(index, 1);
+    this.element.classList.toggle("single", this.panes.length === 1);
+    if (this.selected === pane) {
+      this.selected = null;
+      const next = this.panes[Math.min(index, this.panes.length - 1)];
+      if (next) this.select(next);
+    }
+    return this.selected;
+  }
+
+  select(pane: TerminalPane): void {
+    if (this.selected === pane) return;
+    this.selected = pane;
+    this.panes.forEach((p) => {
+      const shown = p === pane;
+      p.element.classList.toggle("hidden", !shown);
+      p.actions.classList.toggle("hidden", !shown);
+      p.tab.classList.toggle("selected", shown);
+    });
+    pane.tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // A pane that was hidden measured as nothing; now it has a size to fit.
+    requestAnimationFrame(() => pane.fit());
+  }
+
+  setActive(active: boolean): void {
+    this.element.classList.toggle("active", active);
+  }
+}
+
+/**
+ * The ＋ menu: a row per profile and a column per place, so any new terminal
+ * is one click.
+ */
+function showAddMenu(anchor: HTMLElement, profiles: Profile[], pick: (profile: Profile, where: Placement) => void) {
+  document.querySelector(".add-menu")?.remove();
+  const menu = document.createElement("div");
+  menu.className = "add-menu";
+  const places: [Placement, string, string][] = [
+    ["tab", "▭", "New tab"],
+    ["x", "◫", "Split right"],
+    ["y", "⊟", "Split down"],
+  ];
+  const head = document.createElement("div");
+  head.className = "add-menu-row add-menu-head";
+  head.append(document.createElement("span"));
+  for (const [, , name] of places) {
+    const label = document.createElement("span");
+    label.textContent = name.replace(/^(New|Split) /, "");
+    head.append(label);
+  }
+  menu.append(head);
+  const keys: Record<Placement, string> = { tab: "T", x: "D", y: "E" };
+  profiles.forEach((profile, i) => {
+    const row = document.createElement("div");
+    row.className = "add-menu-row";
+    const name = document.createElement("span");
+    name.className = "add-menu-name";
+    name.textContent = profile.name;
+    row.append(name);
+    for (const [where, glyph, title] of places) {
+      const button = document.createElement("button");
+      button.className = "pane-btn";
+      button.textContent = glyph;
+      const key = i === 0 ? ` (Ctrl+Shift+${keys[where]})` : i === 1 ? ` (Ctrl+Alt+Shift+${keys[where]})` : "";
+      button.title = `${title}: ${profile.name}${key}`;
+      button.onclick = () => {
+        close();
+        pick(profile, where);
+      };
+      row.append(button);
+    }
+    menu.append(row);
+  });
+  document.body.append(menu);
+
+  const rect = anchor.getBoundingClientRect();
+  const width = menu.offsetWidth;
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.left = `${Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))}px`;
+
+  const onDown = (e: MouseEvent) => {
+    if (!menu.contains(e.target as Node)) close();
+  };
+  // Any key closes it: a shortcut may have changed the layout under it.
+  const onKey = () => close();
+  function close() {
+    menu.remove();
+    document.removeEventListener("mousedown", onDown, true);
+    document.removeEventListener("keydown", onKey, true);
+  }
+  // After this click has finished, or it would close the menu it opened.
+  setTimeout(() => {
+    document.addEventListener("mousedown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+  });
+}
+
+/**
  * One project: the `but tui` on the left and shells beside it, all rooted at
  * the project directory. Any pane splits right or down, so the layout is a
  * tree of rows and columns rather than a fixed pair.
@@ -107,7 +262,7 @@ export class ProjectView {
   readonly element: HTMLDivElement;
 
   private root: Split;
-  private parents = new Map<TerminalPane, Split>();
+  private groups = new Map<TerminalPane, TabGroup>();
   private butPane: TerminalPane;
   private activePane: TerminalPane;
   private run: RunSpec | null = null;
@@ -149,11 +304,14 @@ export class ProjectView {
     });
     this.runButton = this.butPane.addAction("▶", "", () => void this.openRun());
     this.runButton.classList.add("pane-run", "hidden");
-    this.root.children.push(this.butPane);
-    this.parents.set(this.butPane, this.root);
+    const group = this.makeGroup();
+    group.parent = this.root;
+    group.insert(this.butPane);
+    this.groups.set(this.butPane, group);
+    this.root.children.push(group);
 
     this.activePane = this.butPane;
-    this.split(this.butPane, "x", { autostart: false, share: 1 - TUI_SHARE });
+    this.open(this.butPane, "x", { autostart: false, share: 1 - TUI_SHARE });
     this.setActivePane(this.butPane);
   }
 
@@ -161,8 +319,30 @@ export class ProjectView {
     const pane = new TerminalPane(spec);
     pane.onFocus = (p) => this.setActivePane(p);
     pane.onClose = (p) => this.closeShell(p);
-    pane.onSplit = (p, axis) => this.split(p, axis);
     return pane;
+  }
+
+  private makeGroup(): TabGroup {
+    return new TabGroup((group, anchor) => {
+      showAddMenu(anchor, getSettings().profiles, (profile, where) => {
+        // The group may have closed while the menu was open.
+        const target = group.selected;
+        if (target && this.groups.has(target)) this.open(target, where, { spec: this.profileSpec(profile) });
+      });
+    });
+  }
+
+  /** A terminal in the project directory: the shell, or the shell running the profile's command first. */
+  private profileSpec(profile: Profile): PaneSpec {
+    const settings = getSettings();
+    return {
+      cwd: this.project.path,
+      program: settings.shell,
+      args: profile.command
+        ? shellThenCommandArgs(settings.shell, settings.shellArgs, profile.command)
+        : settings.shellArgs,
+      label: profile.name,
+    };
   }
 
   /** Starts every pty. Called once the view is attached and has real dimensions. */
@@ -251,8 +431,8 @@ export class ProjectView {
     };
     const shell = this.shells()[0];
     const pane = shell
-      ? this.split(shell, "y", { spec, focus })
-      : this.split(this.butPane, "x", { spec, focus, share: 1 - TUI_SHARE });
+      ? this.open(shell, "y", { spec, focus })
+      : this.open(this.butPane, "x", { spec, focus, share: 1 - TUI_SHARE });
     this.runPane = pane;
 
     if (target) {
@@ -290,14 +470,14 @@ export class ProjectView {
   }
 
   /**
-   * Opens a pane beside `target`, taking `share` of the room it had: a shell
-   * unless `spec` says otherwise. Splitting along the axis the pane already
-   * sits in adds a sibling; across it, the pane becomes a nested split of its
-   * own.
+   * Opens a pane as a tab beside `target`, or split off its group taking
+   * `share` of the room the group had: a shell unless `spec` says otherwise.
+   * Splitting along the axis the group already sits in adds a sibling; across
+   * it, the group becomes a nested split of its own.
    */
-  split(
+  open(
     target: TerminalPane,
-    axis: Axis,
+    where: Placement,
     {
       autostart = true,
       focus = true,
@@ -305,42 +485,47 @@ export class ProjectView {
       spec,
     }: { autostart?: boolean; focus?: boolean; share?: number; spec?: PaneSpec } = {},
   ): TerminalPane {
-    const settings = getSettings();
-    const pane = this.makePane(
-      spec ?? {
-        cwd: this.project.path,
-        program: settings.shell,
-        args: settings.shellArgs,
-        label: settings.shellLabel,
-      },
-    );
+    const pane = this.makePane(spec ?? this.profileSpec(getSettings().profiles[0]));
+    const group = this.groups.get(target)!;
 
-    const parent = this.parents.get(target)!;
-    if (parent.axis === axis || parent.children.length === 1) {
-      parent.axis = axis;
-      const room = grow(target.element);
-      setGrow(target.element, room * (1 - share));
-      setGrow(pane.element, room * share);
-      parent.children.splice(parent.children.indexOf(target) + 1, 0, pane);
-      this.parents.set(pane, parent);
+    if (where === "tab") {
+      const showing = group.selected;
+      group.insert(pane, target);
+      this.groups.set(pane, group);
+      // Opened in the background, the tab shouldn't take over the view.
+      if (!focus && showing) group.select(showing);
     } else {
-      const nested = new Split(axis);
-      nested.parent = parent;
-      setGrow(nested.element, grow(target.element));
-      parent.children[parent.children.indexOf(target)] = nested;
-      setGrow(target.element, 1 - share);
-      setGrow(pane.element, share);
-      nested.children.push(target, pane);
-      this.parents.set(target, nested);
-      this.parents.set(pane, nested);
-      nested.render();
+      const fresh = this.makeGroup();
+      fresh.insert(pane);
+      this.groups.set(pane, fresh);
+      const parent = group.parent;
+      if (parent.axis === where || parent.children.length === 1) {
+        parent.axis = where;
+        const room = grow(group.element);
+        setGrow(group.element, room * (1 - share));
+        setGrow(fresh.element, room * share);
+        parent.children.splice(parent.children.indexOf(group) + 1, 0, fresh);
+        fresh.parent = parent;
+      } else {
+        const nested = new Split(where);
+        nested.parent = parent;
+        setGrow(nested.element, grow(group.element));
+        parent.children[parent.children.indexOf(group)] = nested;
+        setGrow(group.element, 1 - share);
+        setGrow(fresh.element, share);
+        nested.children.push(group, fresh);
+        group.parent = nested;
+        fresh.parent = nested;
+        nested.render();
+      }
+      parent.render();
     }
-    parent.render();
     this.fitAll();
 
     if (autostart) {
       void pane.start().then(() => {
-        if (!focus) return;
+        // Closed before it finished starting: there's nothing left to focus.
+        if (!focus || !this.groups.has(pane)) return;
         this.setActivePane(pane);
         pane.focus();
       });
@@ -349,37 +534,50 @@ export class ProjectView {
   }
 
   /**
-   * A new shell under the focused one. From the TUI it goes under the last
-   * shell instead, so the TUI keeps its column; with no shells at all it opens
-   * to the right, as at startup.
+   * A new terminal from the keyboard, of the first profile or the one at
+   * `profileIndex`, placed off the focused pane. From the TUI a tab goes beside
+   * the last shell instead, so the TUI keeps its column; with no shells at all
+   * it opens to the right, as at startup.
    */
-  addShell(): TerminalPane {
-    if (this.activePane !== this.butPane) return this.split(this.activePane, "y");
+  newTerminal(where: Placement, profileIndex = 0): TerminalPane {
+    const profiles = getSettings().profiles;
+    const spec = this.profileSpec(profiles[profileIndex] ?? profiles[0]);
+    if (this.activePane !== this.butPane) return this.open(this.activePane, where, { spec });
     const shells = this.shells();
-    if (shells.length === 0) return this.split(this.butPane, "x", { share: 1 - TUI_SHARE });
-    return this.split(shells[shells.length - 1], "y");
+    if (shells.length === 0) return this.open(this.butPane, "x", { spec, share: 1 - TUI_SHARE });
+    if (where === "tab") return this.open(shells[shells.length - 1], "tab", { spec });
+    return this.open(this.butPane, where, { spec });
   }
 
   closeShell(pane: TerminalPane): void {
     if (pane === this.butPane) return;
-    const parent = this.parents.get(pane)!;
-    const index = parent.children.indexOf(pane);
-    const beside = parent.children[index === 0 ? 1 : index - 1];
-    const neighbour = this.firstPane(beside);
-    // The pane beside it takes over the room, rather than leaving a hole.
-    if (beside) setGrow(beside.element, grow(beside.element) + grow(pane.element));
-    parent.children.splice(index, 1);
-    this.parents.delete(pane);
-    pane.dispose();
+    const group = this.groups.get(pane)!;
+    const wasActive = pane === this.activePane;
+    this.groups.delete(pane);
+    let neighbour: TerminalPane | undefined;
+    if (group.panes.length > 1) {
+      neighbour = group.remove(pane) ?? undefined;
+      pane.dispose();
+    } else {
+      const parent = group.parent;
+      const index = parent.children.indexOf(group);
+      const beside = parent.children[index === 0 ? 1 : index - 1];
+      neighbour = this.firstPane(beside);
+      // The group beside it takes over the room, rather than leaving a hole.
+      if (beside) setGrow(beside.element, grow(beside.element) + grow(group.element));
+      parent.children.splice(index, 1);
+      pane.dispose();
+      group.element.remove();
+      this.collapse(parent);
+    }
     if (pane === this.runPane) {
       this.runPane = null;
       this.dashboardButton = null;
       this.updateRunControls();
     }
-    this.collapse(parent);
 
     // The TUI is always there, so there's always somewhere for focus to land.
-    const next = neighbour ?? this.butPane;
+    const next = wasActive ? (neighbour ?? this.butPane) : this.activePane;
     this.setActivePane(next);
     next.focus();
     this.fitAll();
@@ -423,25 +621,31 @@ export class ProjectView {
   }
 
   private adopt(node: LayoutNode, parent: Split): void {
-    if (node instanceof Split) node.parent = parent;
-    else this.parents.set(node, parent);
+    node.parent = parent;
   }
 
   private firstPane(node: LayoutNode | undefined): TerminalPane | undefined {
     if (!node) return undefined;
-    return node instanceof Split ? this.firstPane(node.children[0]) : node;
+    return node instanceof Split ? this.firstPane(node.children[0]) : (node.selected ?? node.panes[0]);
   }
 
   private setActivePane(pane: TerminalPane): void {
     this.activePane = pane;
+    const group = this.groups.get(pane);
+    group?.select(pane);
+    this.allGroups().forEach((g) => g.setActive(g === group));
     this.allPanes().forEach((p) => p.setActive(p === pane));
   }
 
-  /** Every pane in reading order: left to right, top to bottom. */
-  allPanes(): TerminalPane[] {
-    const walk = (node: LayoutNode): TerminalPane[] =>
+  private allGroups(): TabGroup[] {
+    const walk = (node: LayoutNode): TabGroup[] =>
       node instanceof Split ? node.children.flatMap(walk) : [node];
     return walk(this.root);
+  }
+
+  /** Every pane in reading order: left to right, top to bottom, tab by tab. */
+  allPanes(): TerminalPane[] {
+    return this.allGroups().flatMap((g) => g.panes);
   }
 
   private shells(): TerminalPane[] {
@@ -460,8 +664,12 @@ export class ProjectView {
     this.closeShell(this.activePane);
   }
 
-  splitActive(axis: Axis): void {
-    this.split(this.activePane, axis);
+  /** Steps through the tabs of the focused pane's group. */
+  cycleTab(direction: 1 | -1): void {
+    const panes = this.groups.get(this.activePane)!.panes;
+    const next = panes[(panes.indexOf(this.activePane) + direction + panes.length) % panes.length];
+    this.setActivePane(next);
+    next.focus();
   }
 
   cyclePane(direction: 1 | -1): void {

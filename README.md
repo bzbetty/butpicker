@@ -20,10 +20,14 @@ Replaces the "Windows Terminal with one tab per repo, plus a second pane for
 
 - The left pane runs `but tui`. It can't be closed, only restarted (`↻` or
   `Ctrl+Shift+R`). If `but` exits it says so and offers a restart.
-- The right side starts with a shell, started in the repository directory. Any
-  pane, the TUI included, splits right (`◫`, `Ctrl+Shift+D`) or down (`⊟`,
-  `Ctrl+Shift+E`) into as many shells as you like. `Ctrl+Shift+T` adds one under
-  the focused shell; close with `×` or `Ctrl+Shift+W`.
+- The right side starts with a shell, started in the repository directory.
+  Every pane holds tabs, and `+` in its header opens a new terminal as a tab,
+  split right or split down, as a shell or as `claude`. The keyboard does the
+  same: `Ctrl+Shift+T` / `D` / `E` for a shell, add `Alt` for `claude`. Close
+  with a tab's `×`, a middle-click, or `Ctrl+Shift+W`.
+- A `claude` terminal is the shell running `claude`, so quitting it leaves a
+  prompt in the repository rather than a dead pane. The list lives under
+  `profiles` in the app settings, so other commands can join it.
 - Every divider drags.
 - Tabs drag to reorder.
 
@@ -158,13 +162,15 @@ Repositories that have since disappeared are skipped rather than erroring.
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+1`…`Ctrl+9` | Jump to tab by position |
 | `Ctrl+Shift+PageUp` / `PageDown` | Move the current tab left / right |
-| `Ctrl+Shift+T` | New terminal pane under the focused shell |
-| `Ctrl+Shift+D` | Split the focused pane right |
-| `Ctrl+Shift+E` | Split the focused pane down |
-| `Ctrl+Shift+W` | Close the focused terminal pane |
+| `Ctrl+Shift+T` | New shell tab beside the focused one |
+| `Ctrl+Shift+D` | New shell, split right of the focused pane |
+| `Ctrl+Shift+E` | New shell, split down from the focused pane |
+| `Ctrl+Alt+Shift+T` / `D` / `E` | The same, running `claude` |
+| `Ctrl+PageUp` / `PageDown` | Previous / next tab in the focused pane |
+| `Ctrl+Shift+W` | Close the focused terminal |
 | `Ctrl+Shift+R` | Restart the `but tui` pane |
 | `Ctrl+F5` | Start the run pane, or go to it |
-| `Ctrl+]` | Cycle focus between panes |
+| `Ctrl+]` | Cycle focus between terminals, tabs included |
 
 Everything else goes straight to the pty, so `but`'s own keys and `Ctrl+C` in a
 shell behave normally.
