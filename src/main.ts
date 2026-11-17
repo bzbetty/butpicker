@@ -10,6 +10,7 @@ import {
   buildStatus,
   detectRun,
   emptyBuildConfig,
+  emptyPrsConfig,
   emptyRunConfig,
   getSession,
   listProjects,
@@ -84,6 +85,10 @@ async function openProject(project: Project): Promise<void> {
   view.fitAll();
   detectedRun.set(project.id, await detecting);
   view.configureRun(runSpecFor(project.id));
+  // The pane's answer feeds the tab's PR badge.
+  view.prs.onChange = renderTabs;
+  if (projectSettingsFor(project.id).prs.open) view.togglePrs(true);
+  void view.refreshWorktrees();
   // Restore activates every tab in turn on the way through; only the one you
   // end up looking at should get its run started.
   if (activeId === project.id && !restoring) view.activated();
@@ -188,6 +193,7 @@ async function refreshStatuses(): Promise<void> {
   });
   let changed = false;
   for (const [id, status, build] of results) {
+    if (status && !status.error) views.get(id)?.prs.setApplied(status.applied ?? [], statusIgnoreBranches);
     if (status) {
       const previous = statuses.get(id);
       if (
@@ -340,6 +346,34 @@ function buildBadge(id: string): HTMLElement | null {
     e.stopPropagation();
     if (build.url) void openUrl(build.url);
     else showProjectSettings(id);
+  };
+  return badge;
+}
+
+/**
+ * PRs that are yours or waiting on your review, once the PRs pane has loaded
+ * for this tab. Red when one of yours has a failing build. Clicking opens the pane.
+ */
+function prBadge(id: string): HTMLElement | null {
+  const view = views.get(id);
+  const summary = view?.prs.summary();
+  if (!view || !summary || summary.yours === 0) return null;
+  const badge = document.createElement("span");
+  badge.className = "badge prs" + (summary.failing ? " failing" : "") + (summary.toReview ? " review" : "");
+  badge.textContent = `PR ${summary.yours}`;
+  badge.title = [
+    `${summary.yours} open PR${summary.yours === 1 ? "" : "s"} of yours or waiting on you`,
+    summary.toReview ? `${summary.toReview} waiting on your review` : "",
+    summary.failing ? "One of yours has a failing build" : "",
+    "Click for PRs & builds",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  badge.addEventListener("pointerdown", (e) => e.stopPropagation());
+  badge.onclick = (e) => {
+    e.stopPropagation();
+    activate(id);
+    view.togglePrs(true);
   };
   return badge;
 }
@@ -629,6 +663,7 @@ function projectSettingsFor(id: string): ProjectSettings {
     builds: stored?.builds ?? emptyBuildConfig(),
     // Settings saved before the run pane existed have no `run` at all.
     run: stored?.run ?? emptyRunConfig(),
+    prs: stored?.prs ?? emptyPrsConfig(),
   };
 }
 
@@ -661,6 +696,7 @@ function showProjectSettings(id: string): void {
   if (!view) return;
   const current = projectSettingsFor(id).builds;
   const currentRun = projectSettingsFor(id).run;
+  const currentPrs = projectSettingsFor(id).prs;
   const detectedCommand = detectedRun.get(id) ?? null;
   const build = builds.get(id);
   // `org / project / repo` as the poll resolved it, so the override boxes can
@@ -723,6 +759,13 @@ function showProjectSettings(id: string): void {
     );
     field("Run command", "Through your shell. Blank uses what was detected.", runCommand);
 
+    const prsMode = select([
+      ["closed", "Closed until Ctrl+Shift+P"],
+      ["open", "Open when the tab opens"],
+    ]);
+    prsMode.value = currentPrs.open ? "open" : "closed";
+    field("PRs & builds", "Open PRs, their checks, and recent pipeline runs, from the remote.", prsMode);
+
     const mode = select([
       ["auto", "Auto — on when the remote is Azure DevOps"],
       ["on", "Always on"],
@@ -773,10 +816,13 @@ function showProjectSettings(id: string): void {
           mode: runMode.value === "button" ? null : (runMode.value as "auto" | "off"),
           command: trimmed(runCommand.value),
         },
+        // Closed is the default, so it's stored as no choice at all.
+        prs: { open: prsMode.value === "open" ? true : null },
       };
       projectSettings.set(id, next);
       closeModal();
       view.configureRun(runSpecFor(id));
+      if (next.prs.open && !currentPrs.open) view.togglePrs(true);
       if (id === activeId) view.activated();
       // Drop the old answer rather than leaving a badge that the new settings
       // no longer stand behind.
@@ -833,6 +879,9 @@ window.addEventListener(
     } else if (!e.shiftKey && e.code === "F5") {
       take();
       void view?.openRun();
+    } else if (e.shiftKey && e.code === "KeyP") {
+      take();
+      view?.togglePrs();
     } else if (e.shiftKey && e.code === "KeyR") {
       take();
       void view?.tui.restart();

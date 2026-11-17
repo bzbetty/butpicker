@@ -88,11 +88,11 @@ impl BuildStatus {
 /// in the same org would otherwise each shell out to `az`.
 #[derive(Default)]
 pub struct Builds {
-    inner: Mutex<Cache>,
+    pub(crate) inner: Mutex<Cache>,
 }
 
 #[derive(Default)]
-struct Cache {
+pub(crate) struct Cache {
     token: Option<(String, Instant)>,
     /// `org/project/repo` to repository id. Stable for the life of the repo.
     repo_ids: HashMap<String, String>,
@@ -105,18 +105,18 @@ struct Cache {
 
 /// Org, project and repo, however they were arrived at.
 #[derive(Clone, Debug, PartialEq)]
-struct Coords {
-    org: String,
-    project: String,
-    repo: String,
+pub(crate) struct Coords {
+    pub(crate) org: String,
+    pub(crate) project: String,
+    pub(crate) repo: String,
 }
 
 impl Coords {
-    fn label(&self) -> String {
+    pub(crate) fn label(&self) -> String {
         format!("{} / {} / {}", self.org, self.project, self.repo)
     }
 
-    fn org_url(&self) -> String {
+    pub(crate) fn org_url(&self) -> String {
         format!("https://dev.azure.com/{}", encode(&self.org))
     }
 }
@@ -128,7 +128,7 @@ impl Coords {
 /// https://enlighten.visualstudio.com/DefaultCollection/Internal/_git/Job
 /// git@ssh.dev.azure.com:v3/Enlighten/Enlighten Internal/Job
 /// ```
-fn parse_remote(raw: &str) -> Option<Coords> {
+pub(crate) fn parse_remote(raw: &str) -> Option<Coords> {
     let url = raw.trim().trim_end_matches('/');
     let url = url.strip_suffix(".git").unwrap_or(url);
 
@@ -180,7 +180,7 @@ fn parse_remote(raw: &str) -> Option<Coords> {
     })
 }
 
-fn git_remotes(cwd: &Path) -> Vec<(String, String)> {
+pub(crate) fn git_remotes(cwd: &Path) -> Vec<(String, String)> {
     let mut cmd = Command::new("git");
     cmd.current_dir(cwd).args(["remote", "-v"]);
     #[cfg(windows)]
@@ -212,7 +212,7 @@ fn remote_coords(cwd: &Path) -> Option<Coords> {
 
 /* -------------------------------------------------------------------- auth */
 
-fn az_token(cache: &Mutex<Cache>) -> Result<String, String> {
+pub(crate) fn az_token(cache: &Mutex<Cache>) -> Result<String, String> {
     if let Ok(guard) = cache.lock() {
         if let Some((token, fetched)) = &guard.token {
             if fetched.elapsed() < TOKEN_TTL {
@@ -260,7 +260,7 @@ fn az_token(cache: &Mutex<Cache>) -> Result<String, String> {
 
 /* -------------------------------------------------------------------- http */
 
-fn client() -> &'static reqwest::Client {
+pub(crate) fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
@@ -270,7 +270,7 @@ fn client() -> &'static reqwest::Client {
     })
 }
 
-async fn get_json(url: &str, token: &str) -> Result<serde_json::Value, String> {
+pub(crate) async fn get_json(url: &str, token: &str) -> Result<serde_json::Value, String> {
     let response = client()
         .get(url)
         .bearer_auth(token)
@@ -568,7 +568,7 @@ fn decode(segment: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn encode(segment: &str) -> String {
+pub(crate) fn encode(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for byte in segment.bytes() {
         match byte {

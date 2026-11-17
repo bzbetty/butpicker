@@ -1,6 +1,14 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { TerminalPane, type PaneSpec } from "./pty";
-import type { Project, RunningAppHost } from "./projects";
+import { PrsPanel } from "./prs";
+import {
+  listWorktrees,
+  worktreeLabel,
+  worktreeName,
+  type Project,
+  type RunningAppHost,
+  type Worktree,
+} from "./projects";
 import { getSettings, shellCommandArgs, shellThenCommandArgs, type Profile } from "./settings";
 
 export type Axis = "x" | "y";
@@ -378,6 +386,10 @@ export class ProjectView {
   private attachView: "describe" | "logs" = "describe";
   /** Set while deciding between running and attaching, so a double click opens one pane. */
   private opening = false;
+  /** The PRs & builds pane, docked right of the terminals. */
+  readonly prs: PrsPanel;
+  private prsGutter: HTMLDivElement;
+  private prsButton: HTMLButtonElement;
 
   /** Brings `aspire` up to date before the run pane decides what to start. */
   beforeRun?: () => Promise<void>;
@@ -389,7 +401,20 @@ export class ProjectView {
 
     this.element = document.createElement("div");
     this.element.className = "project";
-    this.root = new Split("x", this.element);
+    // The terminals' split tree gets a box of its own, so the PRs pane can dock
+    // beside it without being a leaf of the tree.
+    const layout = document.createElement("div");
+    layout.className = "project-layout";
+    this.root = new Split("x", layout);
+    this.prs = new PrsPanel(project.path);
+    this.prs.onClose = () => this.togglePrs(false);
+    this.prs.onFix = (prompt) => this.openClaude(prompt);
+    this.prsGutter = document.createElement("div");
+    this.prsGutter.className = "gutter gutter-x";
+    this.installPrsGutter();
+    this.prs.element.classList.add("hidden");
+    this.prsGutter.classList.add("hidden");
+    this.element.append(layout, this.prsGutter, this.prs.element);
 
     this.butPane = this.makePane({
       cwd: project.path,
@@ -401,6 +426,10 @@ export class ProjectView {
     });
     this.runButton = this.butPane.addAction("▶", "", () => void this.openRun());
     this.runButton.classList.add("pane-run", "hidden");
+    this.worktreeButton = this.butPane.addAction("worktrees", "", () => void this.showWorktrees());
+    this.worktreeButton.classList.add("pane-worktrees", "hidden");
+    this.prsButton = this.butPane.addAction("PRs", "PRs & builds (Ctrl+Shift+P)", () => this.togglePrs());
+    this.prsButton.classList.add("pane-prs");
     const group = this.makeGroup();
     group.parent = this.root;
     group.insert(this.butPane);
@@ -440,6 +469,56 @@ export class ProjectView {
         : settings.shellArgs,
       label: profile.name,
     };
+  }
+
+  /** Shows or hides the PRs & builds pane; with no argument, flips it. */
+  togglePrs(show = this.prs.element.classList.contains("hidden")): void {
+    this.prs.element.classList.toggle("hidden", !show);
+    this.prsGutter.classList.toggle("hidden", !show);
+    this.prsButton.classList.toggle("on", show);
+    if (show) void this.prs.refresh(false);
+    this.fitAll();
+  }
+
+  get prsOpen(): boolean {
+    return !this.prs.element.classList.contains("hidden");
+  }
+
+  /** Drags the PRs pane's width; the terminals take whatever's left. */
+  private installPrsGutter(): void {
+    const MIN = 280;
+    this.prsGutter.addEventListener("pointerdown", (down: PointerEvent) => {
+      down.preventDefault();
+      const start = this.prs.element.offsetWidth;
+      const max = this.element.offsetWidth - 300;
+      document.body.classList.add("resizing-x");
+      const onMove = (move: PointerEvent) => {
+        const width = Math.max(MIN, Math.min(max, start - (move.clientX - down.clientX)));
+        this.prs.element.style.width = `${width}px`;
+        this.fitAll();
+      };
+      const onUp = () => {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+        document.body.classList.remove("resizing-x");
+      };
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+    });
+  }
+
+  /**
+   * A `claude` terminal started with `prompt`, as a tab beside the last shell
+   * so the TUI keeps its column. Uses the `claude` profile's command if there
+   * is one, so a customised launch line still applies.
+   */
+  openClaude(prompt: string): TerminalPane {
+    const command = getSettings().profiles.find((p) => p.name === "claude")?.command ?? "claude";
+    const spec = this.profileSpec({ name: "claude", command: `${command} "${prompt}"` });
+    const shells = this.shells();
+    return shells.length
+      ? this.open(shells[shells.length - 1], "tab", { spec })
+      : this.open(this.butPane, "x", { spec, share: 1 - TUI_SHARE });
   }
 
   /** Starts every pty. Called once the view is attached and has real dimensions. */
@@ -919,6 +998,7 @@ export class ProjectView {
 
   dispose(): void {
     this.allPanes().forEach((p) => p.dispose());
+    this.prs.dispose();
     this.element.remove();
   }
 }

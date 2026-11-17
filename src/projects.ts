@@ -15,6 +15,8 @@ export interface ProjectStatus {
   pending: number;
   branches: number;
   stacks: number;
+  /** Names of the applied branches. */
+  applied: string[];
   error: string | null;
 }
 
@@ -37,9 +39,88 @@ export interface RunConfig {
   command: string | null;
 }
 
+/** The PRs & builds pane. */
+export interface PrsConfig {
+  /** null is the default: closed until Ctrl+Shift+P. true opens it with the tab. */
+  open: boolean | null;
+}
+
 export interface ProjectSettings {
   builds: BuildConfig;
   run: RunConfig;
+  prs: PrsConfig;
+}
+
+export type CheckState =
+  | "succeeded"
+  | "failed"
+  | "partial"
+  | "running"
+  | "queued"
+  | "expired"
+  | "canceled"
+  | "skipped"
+  | "unknown";
+
+export interface Reviewer {
+  name: string;
+  vote: "approved" | "suggestions" | "waiting" | "rejected" | "none";
+  me: boolean;
+  required: boolean;
+}
+
+export interface Check {
+  name: string;
+  /** `build` for a pipeline or check run; `policy` for reviewer counts and the like. */
+  kind: "build" | "policy";
+  state: CheckState;
+  detail: string;
+  url: string;
+  blocking: boolean;
+}
+
+export interface PullRequest {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  mine: boolean;
+  reviewRequested: boolean;
+  sourceBranch: string;
+  targetBranch: string;
+  draft: boolean;
+  conflicts: boolean;
+  created: string;
+  reviewers: Reviewer[];
+  checks: Check[];
+  ready: boolean;
+}
+
+export interface PipelineRun {
+  state: CheckState;
+  number: string;
+  branch: string;
+  url: string;
+  time: string | null;
+}
+
+export interface Pipeline {
+  name: string;
+  url: string;
+  /** Newest first. */
+  runs: PipelineRun[];
+}
+
+/** What the PRs & builds pane shows for one repository. */
+export interface Activity {
+  provider: "azure" | "github" | "none";
+  source: string;
+  remote: string;
+  repoUrl: string;
+  defaultBranch: string;
+  prs: PullRequest[];
+  pipelines: Pipeline[];
+  error: string | null;
 }
 
 export type BuildState =

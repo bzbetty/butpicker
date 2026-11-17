@@ -35,6 +35,15 @@ pub struct Session {
 pub struct ProjectSettings {
     pub builds: BuildConfig,
     pub run: RunConfig,
+    pub prs: PrsConfig,
+}
+
+/// The PRs & builds pane.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PrsConfig {
+    /// None is the default: closed until Ctrl+Shift+P. `true` opens it with the tab.
+    pub open: Option<bool>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -163,6 +172,7 @@ fn is_default(settings: &ProjectSettings) -> bool {
     let run = &settings.run;
     builds.enabled.is_none()
         && run.mode.is_none()
+        && settings.prs.open.is_none()
         && builds.definitions.is_empty()
         && [
             &builds.organization,

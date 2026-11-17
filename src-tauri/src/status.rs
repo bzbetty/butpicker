@@ -19,6 +19,9 @@ pub struct ProjectStatus {
     pub branches: usize,
     /// Stacks in the workspace.
     pub stacks: usize,
+    /// Names of the applied branches, so the PRs pane can mark the PRs you
+    /// have in front of you.
+    pub applied: Vec<String>,
     /// Set when `but` couldn't answer; the badge goes quiet rather than lying.
     pub error: Option<String>,
 }
@@ -133,6 +136,11 @@ fn read_status(path: String, program: String, ignore_branches: Vec<String>) -> P
             .iter()
             .filter(|s| counts(&s.branches) > 0)
             .count(),
+        applied: parsed
+            .stacks
+            .iter()
+            .flat_map(|s| s.branches.iter().map(|b| b.name.clone()))
+            .collect(),
         error: None,
     }
 }

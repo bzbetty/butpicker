@@ -164,6 +164,12 @@ body.dragging-tab * {
 .project {
   position: absolute;
   inset: 0;
+  display: flex;
+}
+
+/* The terminals' split tree, beside the docked PRs pane when it's open. */
+.project-layout {
+  flex: 1 1 0;
 }
 
 .hidden {
@@ -869,4 +875,493 @@ body.resizing-y * {
 
 .sheet-actions.end {
   margin: 16px 0 0;
+}
+
+/* ---------------------------------------------------------- PRs & builds */
+
+.badge.prs {
+  cursor: pointer;
+  background: #6e768133;
+  color: #c9d1d9;
+}
+
+.badge.prs.review {
+  background: #1f6feb40;
+  color: #cfe2ff;
+}
+
+.badge.prs.failing {
+  background: #f8514926;
+  color: #ff7b72;
+}
+
+.badge.prs:hover {
+  filter: brightness(1.3);
+}
+
+.pane-btn.pane-prs {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.pane-btn.pane-prs.on {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.prs-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: 460px;
+  min-width: 0;
+  background: var(--bg);
+  overflow: hidden;
+  user-select: text;
+}
+
+.prs-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--header-h);
+  flex: 0 0 var(--header-h);
+  padding: 0 6px 0 12px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.prs-title {
+  color: var(--text);
+}
+
+.prs-source {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prs-header .pane-btn {
+  opacity: 0.8;
+  font-size: 12px;
+}
+
+.prs-refresh.spinning {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.prs-body {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+.prs-empty {
+  padding: 24px 16px;
+  color: var(--text-dim);
+}
+
+.prs-error {
+  color: #ff7b72;
+  margin-bottom: 6px;
+}
+
+.prs-remote,
+.prs-foot {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.prs-foot {
+  margin-top: 10px;
+  padding: 8px 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.prs-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.prs-link {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 11.5px;
+  cursor: pointer;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prs-link:hover {
+  text-decoration: underline;
+}
+
+.prs-none {
+  padding: 4px 12px;
+  color: var(--text-dim);
+}
+
+.prs-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1px 10px;
+  padding: 6px 12px 6px 10px;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+}
+
+.prs-row:hover {
+  background: #161d26;
+}
+
+.prs-row.open {
+  background: #1f6feb1a;
+  border-left-color: var(--accent);
+}
+
+.prs-pr-title {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  color: #e6edf3;
+}
+
+.prs-pr-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prs-id {
+  color: var(--text-dim);
+}
+
+.prs-tag {
+  flex: none;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.prs-tag.applied {
+  border-color: #a371f766;
+  color: #d2a8ff;
+}
+
+.prs-meta {
+  grid-column: 1;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prs-branch {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+}
+
+.prs-ask {
+  color: var(--accent);
+}
+
+.prs-warn {
+  color: #e3b341;
+}
+
+.prs-right {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prs-ready {
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: #238636;
+  color: #fff;
+  font-size: 11px;
+}
+
+.prs-pill {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.prs-pill.succeeded {
+  color: #3fb950;
+}
+
+.prs-pill.failed {
+  color: #ff7b72;
+  border-color: #f8514955;
+}
+
+.prs-pill.running,
+.prs-pill.queued,
+.prs-pill.expired {
+  color: #79c0ff;
+}
+
+.prs-pill.running {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.prs-pill.partial {
+  color: #e3b341;
+}
+
+.prs-votes {
+  display: flex;
+  align-items: center;
+  padding-left: 4px;
+}
+
+.prs-av {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-left: -4px;
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  background: #30363d;
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.prs-av.me {
+  outline: 1px dashed var(--accent);
+  outline-offset: 1px;
+}
+
+.prs-av i {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  font: 700 7.5px/11px system-ui, sans-serif;
+  font-style: normal;
+  text-align: center;
+  color: #0d1117;
+}
+
+.prs-av .vote-approved,
+.prs-av .vote-suggestions {
+  background: #3fb950;
+}
+
+.prs-av .vote-waiting {
+  background: #d29922;
+}
+
+.prs-av .vote-rejected {
+  background: #f85149;
+}
+
+.prs-more {
+  margin-left: 3px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.prs-detail {
+  margin: 2px 12px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  font-size: 12px;
+}
+
+.prs-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.prs-check-glyph {
+  flex: 0 0 14px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.prs-check.succeeded .prs-check-glyph {
+  color: #3fb950;
+}
+
+.prs-check.failed .prs-check-glyph {
+  color: #ff7b72;
+}
+
+.prs-check.running .prs-check-glyph,
+.prs-check.queued .prs-check-glyph,
+.prs-check.expired .prs-check-glyph {
+  color: #e3b341;
+}
+
+.prs-check-name {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+}
+
+.prs-check-sub {
+  color: var(--text-dim);
+}
+
+.prs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.prs-btn {
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #21262d;
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.prs-btn:hover {
+  filter: brightness(1.25);
+}
+
+.prs-btn.primary {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #fff;
+}
+
+.prs-btn.claude {
+  border-color: #a371f766;
+  background: #a371f71a;
+  color: #d2a8ff;
+}
+
+.prs-pipe {
+  display: grid;
+  grid-template-columns: minmax(70px, 130px) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px;
+}
+
+.prs-pipe-name {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #e6edf3;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prs-pipe-name:hover {
+  color: var(--accent);
+}
+
+.prs-runs {
+  display: flex;
+  gap: 3px;
+}
+
+.prs-run {
+  width: 11px;
+  height: 11px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: #30363d;
+  cursor: pointer;
+}
+
+.prs-run:hover {
+  outline: 1px solid var(--text);
+}
+
+.prs-run.succeeded {
+  background: #238636;
+}
+
+.prs-run.failed {
+  background: #da3633;
+}
+
+.prs-run.partial {
+  background: #9e6a03;
+}
+
+.prs-run.running {
+  background: #1f6feb;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.prs-run.queued {
+  background: #1f6feb66;
+}
+
+.prs-pipe-info {
+  justify-self: end;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.prs-pipe-info.failed {
+  color: #ff7b72;
 }

@@ -142,6 +142,46 @@ Answers are cached for a minute in the Rust side, so a burst of tab polls
 doesn't turn into a burst of Azure calls. Repository ids are cached for the
 life of the process and the token for twenty minutes.
 
+## PRs & builds
+
+`PRs` on the TUI header, or `Ctrl+Shift+P`, docks a pane to the right of the
+terminals with the repository's open pull requests and its pipelines. The
+gutter beside it drags. To have it open whenever the tab opens, set
+**PRs & builds** in the project settings.
+
+Like the build badge, it reads the provider from the git remote. An Azure
+DevOps remote uses the `az` login, and a GitHub remote uses `gh auth token`,
+so there's still no PAT to store. `origin` wins, and on the same remote Azure
+wins over GitHub, so a GitHub mirror that builds in Azure shows Azure.
+
+Each PR row shows:
+
+- the build checks, rolled up so the worst one shows: a red build isn't
+  hidden behind a green one;
+- the reviewers' votes, with yours outlined while you haven't voted;
+- `⎇ applied` when its branch is applied in your GitButler workspace;
+- `your review` when it's waiting on you (these sort first), `⚠ conflicts`,
+  `draft`, and a green `Ready` on yours once every blocking policy passes.
+
+Click a row for every branch policy (build validation, reviewer counts,
+comments, work items) with a link to each build's log. When a build has
+failed, **Fix with Claude** opens a `claude` tab in the project with the
+failure as its prompt.
+
+An applied branch with no PR yet gets a **+ New PR from …** link to the
+provider's create page. Below the PRs, each pipeline or workflow gets a strip
+of its last ten runs, oldest to newest, so a flaky one stands out. Each square
+links to its run.
+
+Once the pane has loaded for a tab, the tab gets a `PR n` badge. The count is
+PRs that are yours or waiting on your review. It's highlighted when one is
+waiting on you and red when one of yours has a failing build. Clicking it
+opens the pane.
+
+The pane refreshes once a minute while it's showing and the window has focus,
+and `⟳` forces a refresh. Answers are cached for a minute on the Rust side,
+like the build badge's.
+
 ## Project settings
 
 Some settings belong to one repository rather than to the app. Right-click a tab
@@ -155,6 +195,7 @@ Some settings belong to one repository rather than to the app. Right-click a tab
 | Organisation / Project / Repository | from the remote | Overrides for a repo whose remote doesn't spell them out, or whose Azure repo is named differently from the folder. |
 | Pipelines | every pipeline building the repo | Definition ids, comma separated, when you'd rather pin them. |
 | Branch | whichever built last | Only report builds of this branch. |
+| PRs & builds | Closed | `Open when the tab opens` docks the PRs & builds pane as soon as the tab opens. |
 
 These live beside the open-tabs session in
 `%APPDATA%\dev.bzbetty.butpicker\session.json`, keyed by repository path, rather
@@ -188,6 +229,7 @@ Repositories that have since disappeared are skipped rather than erroring.
 | `Ctrl+Alt+Shift+T` / `D` / `E` | The same, running `claude` |
 | `Ctrl+PageUp` / `PageDown` | Previous / next tab in the focused pane |
 | `Ctrl+Shift+W` | Close the focused terminal |
+| `Ctrl+Shift+P` | Show or hide the PRs & builds pane |
 | `Ctrl+Shift+R` | Restart the `but tui` pane |
 | `Ctrl+F5` | Start the run pane, or go to it |
 | `Ctrl+]` | Cycle focus between terminals, tabs included |
@@ -257,6 +299,10 @@ Open tabs and per-project settings are stored separately, in
   org/project/repo, borrows the az CLI's login for a bearer token, then asks the
   Git and Builds REST APIs. Token, repository ids and answers are all cached, so
   a tab poll usually costs nothing.
+- `src-tauri/src/prs.rs` — the PRs & builds pane: picks Azure DevOps or GitHub
+  from the remote, then fetches PRs, their policy evaluations or check runs,
+  their reviews, and recent pipeline runs. Shares `builds.rs`'s az token and
+  HTTP client.
 - `src-tauri/src/projects.rs` — directory listing plus the session file.
 - `src/pty.ts` — one `TerminalPane` per pty: xterm, fit addon, WebGL renderer
   with a silent fallback, and a `ResizeObserver` keeping the pty's window size
