@@ -63,6 +63,26 @@ puts a purple `◆` on its tab. Click it, or `◉` in the run pane, to open the
 dashboard. Paths are resolved before they're compared, so a repo opened through
 a junction still matches the real path that `aspire ps` reports.
 
+Worktrees count too. The same check asks `git worktree list` for every
+worktree of each open repository, wherever the tool that made it put it:
+Claude Code's `.claude/worktrees`, T3 Code's `~/.t3/worktrees`, GitButler's,
+or a folder next to the repo from VS Code. Each running AppHost belongs to the
+most specific folder it sits under, so an agent's app in a worktree nested
+inside the repo isn't mistaken for the repo's own, and `▶` still runs yours.
+The tab's `◆` counts every app running across the repo and its worktrees, and
+its tooltip names each by branch.
+
+When the repository has other worktrees, a **N worktrees** button in the TUI
+header lists them. It turns purple, with a `◆`, once an app is running in one. Each row has `▶`,
+which works like the main `▶` but in that worktree. It runs the project's
+command there, or follows the app if something else already started it, or
+goes to the pane if one is open. The row also has the dashboard (`◉`) and
+`aspire stop` (`■`). Two copies of one AppHost would fight over the same
+ports. So when anything else of the project's is running or starting, the
+second `aspire run` gets `--isolated` added, which gives it random ports and
+its own copy of the user secrets. That applies whichever checkout starts
+second, the main one included.
+
 ## Opening a repository
 
 `Ctrl+T` lists every git repository directly under your git root (`C:\git` by

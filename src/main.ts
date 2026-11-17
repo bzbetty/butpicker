@@ -24,6 +24,7 @@ import {
   type ProjectSettings,
   type ProjectStatus,
   type RunningAppHost,
+  worktreeName,
 } from "./projects";
 import { getSettings } from "./settings";
 import { ProjectView, type RunSpec } from "./workspace";
@@ -213,8 +214,8 @@ async function refreshStatuses(): Promise<void> {
   if (changed) renderTabs();
 }
 
-/** Each open project's running AppHost, where it has one. */
-const aspireState = new Map<string, RunningAppHost>();
+/** Each open project's running AppHosts, its own and its worktrees', where it has any. */
+const aspireState = new Map<string, RunningAppHost[]>();
 let aspireCheckedAt = 0;
 let aspireInFlight: Promise<void> | null = null;
 
@@ -228,6 +229,10 @@ const ASPIRE_ACTIVATE_MS = 10_000;
  * answer is older than `maxAgeMs`. One call covers every tab, and it's only
  * made at all when an open project has an AppHost.
  */
+/** What the ◆ badge shows of a project's AppHosts, to tell when it needs redrawing. */
+const badgeKey = (hosts: RunningAppHost[]) =>
+  hosts.map((h) => `${h.worktree}|${h.branch}|${h.dashboardUrl}`).join("\n");
+
 function refreshAspire(maxAgeMs: number): Promise<void> {
   if (aspireInFlight) return aspireInFlight;
   if (Date.now() - aspireCheckedAt < maxAgeMs) return Promise.resolve();
@@ -239,12 +244,12 @@ function refreshAspire(maxAgeMs: number): Promise<void> {
       aspireCheckedAt = Date.now();
       let changed = false;
       ids.forEach((id, i) => {
-        const next = running[paths[i]] ?? null;
-        const previous = aspireState.get(id) ?? null;
-        if (next) aspireState.set(id, next);
+        const next = running[paths[i]] ?? [];
+        const previous = aspireState.get(id) ?? [];
+        if (next.length) aspireState.set(id, next);
         else aspireState.delete(id);
         views.get(id)?.setAspire(next);
-        if (previous?.dashboardUrl !== next?.dashboardUrl || !previous !== !next) changed = true;
+        if (badgeKey(previous) !== badgeKey(next)) changed = true;
       });
       if (changed) renderTabs();
     })
@@ -362,21 +367,27 @@ function statusBadges(id: string): HTMLElement | null {
       ` across ${status.stacks} stack${status.stacks === 1 ? "" : "s"}`;
     wrap.appendChild(branches);
   }
-  const aspire = aspireState.get(id);
-  if (aspire) {
+  const hosts = aspireState.get(id) ?? [];
+  if (hosts.length) {
+    // The project's own checkout first: its dashboard is the one a click opens.
+    const sorted = [...hosts].sort((a, b) => Number(!!a.worktree) - Number(!!b.worktree));
+    const target = sorted.find((h) => h.dashboardUrl);
     const running = document.createElement("span");
     running.className = "badge aspire";
-    running.textContent = "◆";
-    running.title = aspire.dashboardUrl
-      ? `Aspire is running · ${aspire.dashboardUrl}\nClick for the dashboard`
-      : "Aspire is running";
+    running.textContent = hosts.length > 1 ? `◆${hosts.length}` : "◆";
+    const lines = sorted.map((h) => `${worktreeName(h)}${h.dashboardUrl ? ` · ${h.dashboardUrl}` : ""}`);
+    running.title =
+      `Aspire is running\n${lines.join("\n")}` +
+      (target ? `\nClick for ${worktreeName(target)}'s dashboard` : "");
     running.addEventListener("pointerdown", (e) => e.stopPropagation());
     running.onclick = (e) => {
       e.stopPropagation();
-      if (aspire.dashboardUrl) void openUrl(aspire.dashboardUrl);
+      if (target?.dashboardUrl) void openUrl(target.dashboardUrl);
     };
     wrap.appendChild(running);
   }
+  const prs = prBadge(id);
+  if (prs) wrap.appendChild(prs);
   const build = buildBadge(id);
   if (build) wrap.appendChild(build);
   return wrap.childElementCount ? wrap : null;

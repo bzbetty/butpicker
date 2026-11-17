@@ -383,6 +383,34 @@ body.resizing-y * {
   opacity: 1;
 }
 
+/* The worktree menu. Purple, like the tab's ◆, once something runs in one. */
+.pane-btn.pane-worktrees {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.pane-btn.pane-worktrees:hover {
+  opacity: 1;
+  color: var(--text);
+}
+
+.pane-btn.pane-worktrees.running,
+.add-menu-name.running {
+  color: #d2a8ff;
+  opacity: 1;
+}
+
+.worktree-menu-head {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  padding: 0 4px 4px;
+}
+
+.add-menu .pane-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 /* The ＋ menu: a profile per row, a place per column. */
 .add-menu {
   position: fixed;

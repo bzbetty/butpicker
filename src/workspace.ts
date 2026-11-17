@@ -228,6 +228,14 @@ function showAddMenu(anchor: HTMLElement, profiles: Profile[], pick: (profile: P
     }
     menu.append(row);
   });
+  const close = popMenu(anchor, menu);
+}
+
+/**
+ * Shows `menu` under `anchor`, right-aligned to it, until a click lands
+ * elsewhere or a key is pressed. Returns what closes it.
+ */
+function popMenu(anchor: HTMLElement, menu: HTMLElement): () => void {
   document.body.append(menu);
 
   const rect = anchor.getBoundingClientRect();
@@ -250,6 +258,85 @@ function showAddMenu(anchor: HTMLElement, profiles: Profile[], pick: (profile: P
     document.addEventListener("mousedown", onDown, true);
     document.addEventListener("keydown", onKey, true);
   });
+  return close;
+}
+
+type WorktreeAction = "run" | "dashboard" | "stop";
+
+/** A row of the worktree menu: a worktree, and what's running there if anything. */
+interface WorktreeRow {
+  tree: Worktree;
+  host: RunningAppHost | null;
+  /** A pane of ours is already running or following it. */
+  open: boolean;
+}
+
+/**
+ * The ⑂ menu on the TUI: a row per linked worktree, wherever the tool that
+ * made it put it, with a run (or a way to the pane already there), its
+ * dashboard, and a stop.
+ */
+function showWorktreeMenu(
+  anchor: HTMLElement,
+  rows: WorktreeRow[],
+  runnable: boolean,
+  act: (row: WorktreeRow, action: WorktreeAction) => void,
+) {
+  document.querySelector(".add-menu")?.remove();
+  const menu = document.createElement("div");
+  menu.className = "add-menu";
+  const head = document.createElement("div");
+  head.className = "worktree-menu-head";
+  head.textContent = rows.length ? "Worktrees" : "No other worktrees";
+  menu.append(head);
+  for (const row of rows) {
+    const { tree, host, open } = row;
+    const line = document.createElement("div");
+    line.className = "add-menu-row";
+    const name = document.createElement("span");
+    name.className = "add-menu-name";
+    if (host) name.classList.add("running");
+    name.textContent = (host ? "◆ " : "") + worktreeLabel(tree.path, tree.branch);
+    name.title = host ? `${tree.path}\n${host.appHostPath}` : tree.path;
+    line.append(name);
+    const actions: [WorktreeAction, string, string, boolean][] = [
+      [
+        "run",
+        "▶",
+        open ? "Go to its pane" : host ? "Already running — follow it" : "Run it here",
+        open || !!host || runnable,
+      ],
+      ["dashboard", "◉", "Open the Aspire dashboard", !!host?.dashboardUrl],
+      ["stop", "■", "Stop the app (aspire stop)", !!host],
+    ];
+    for (const [action, glyph, title, enabled] of actions) {
+      const button = document.createElement("button");
+      button.className = "pane-btn";
+      if (action === "run") button.classList.add("pane-run");
+      button.textContent = glyph;
+      button.title = title;
+      button.disabled = !enabled;
+      button.onclick = () => {
+        close();
+        act(row, action);
+      };
+      line.append(button);
+    }
+    menu.append(line);
+  }
+  const close = popMenu(anchor, menu);
+}
+
+/** An `aspire run` that would fight another copy of the same AppHost for its ports. */
+const isAspireRun = (command: string) => /^\s*aspire\s+run\b/.test(command);
+
+/**
+ * `aspire run --isolated` takes random ports and its own copy of the user
+ * secrets, which is what lets one AppHost run from two worktrees at once.
+ */
+function isolated(command: string): string {
+  if (!isAspireRun(command) || /\s--isolated\b/.test(command)) return command;
+  return command.replace(/^(\s*aspire\s+run)\b/, "$1 --isolated");
 }
 
 /**
@@ -272,6 +359,16 @@ export class ProjectView {
   private dashboardButton: HTMLButtonElement | null = null;
   /** This project's AppHost, if `aspire ps` last saw one running. */
   private aspire: RunningAppHost | null = null;
+  /** The project's other worktrees, as git last listed them. */
+  private worktrees: Worktree[] = [];
+  /** AppHosts running in those worktrees: an agent's, usually. */
+  private worktreeHosts: RunningAppHost[] = [];
+  private worktreeButton: HTMLButtonElement;
+  /**
+   * A pane per worktree that has one, running its app or following it, by
+   * the worktree's path, so ▶ twice goes to the pane there is.
+   */
+  private worktreePanes = new Map<string, { pane: TerminalPane; dashboard: HTMLButtonElement }>();
   /** An auto run starts once per tab, not every time the tab comes back. */
   private autoRan = false;
   /**
@@ -361,14 +458,143 @@ export class ProjectView {
     this.updateRunControls();
   }
 
-  /** What `aspire ps` makes of this project: its AppHost, or null when it's not running. */
-  setAspire(running: RunningAppHost | null): void {
-    this.aspire = running;
+  /**
+   * What `aspire ps` makes of this project: whatever's running from its own
+   * checkout, and from each of its worktrees.
+   */
+  setAspire(running: RunningAppHost[]): void {
+    this.aspire = running.find((h) => !h.worktree) ?? null;
+    this.worktreeHosts = running.filter((h) => h.worktree);
+    this.updateRunControls();
+  }
+
+  /** Asks git again which worktrees the project has. */
+  async refreshWorktrees(): Promise<void> {
+    this.worktrees = await listWorktrees(this.project.path).catch(() => this.worktrees);
+    this.updateRunControls();
+  }
+
+  /** Every worktree worth a row: git's list, plus any with an app running that git didn't list. */
+  private worktreeRows(): WorktreeRow[] {
+    const trees = [...this.worktrees];
+    for (const host of this.worktreeHosts) {
+      if (host.worktree && !trees.some((t) => t.path === host.worktree)) {
+        trees.push({ path: host.worktree, branch: host.branch });
+      }
+    }
+    return trees.map((tree) => ({
+      tree,
+      host: this.hostIn(tree.path),
+      open: this.worktreePanes.has(tree.path),
+    }));
+  }
+
+  private hostIn(worktree: string): RunningAppHost | null {
+    return this.worktreeHosts.find((h) => h.worktree === worktree) ?? null;
+  }
+
+  private async showWorktrees(): Promise<void> {
+    await this.refreshWorktrees();
+    showWorktreeMenu(this.worktreeButton, this.worktreeRows(), !!this.run, (row, action) => {
+      if (action === "run") void this.openWorktree(row.tree);
+      else if (action === "dashboard") {
+        if (row.host?.dashboardUrl) void openUrl(row.host.dashboardUrl);
+      } else if (row.host) void this.onStopAspire?.(row.host.appHostPath);
+    });
+  }
+
+  /**
+   * Whether anything else of this project's is running, or about to be: an
+   * `aspire run` alongside it needs `--isolated` to keep off its ports.
+   * Counts our own run panes too, since a run that's still building isn't in
+   * `aspire ps` yet.
+   */
+  private othersRunning(worktree: string | null): boolean {
+    const hosts = [this.aspire, ...this.worktreeHosts].filter((h) => h && h.worktree !== worktree);
+    const panes = [...this.worktreePanes.keys()].filter((path) => path !== worktree);
+    return hosts.length > 0 || panes.length > 0 || (worktree !== null && this.runPane !== null);
+  }
+
+  /**
+   * Opens a pane for a worktree, like the run pane does for the project's own
+   * checkout: following its app if something else already started it, such
+   * as an agent's `aspire start`, and otherwise running the project's command
+   * there. With a pane already open, this just goes to it.
+   */
+  async openWorktree(tree: Worktree, { attach }: { attach?: boolean } = {}): Promise<void> {
+    const existing = this.worktreePanes.get(tree.path);
+    if (existing) {
+      this.setActivePane(existing.pane);
+      existing.pane.focus();
+      return;
+    }
+    if (attach === undefined) {
+      await this.beforeRun?.();
+      if (this.worktreePanes.has(tree.path)) return;
+    }
+    const target = attach === false ? null : this.hostIn(tree.path);
+    if (!target && !this.run) return;
+
+    const name = worktreeLabel(tree.path, tree.branch);
+    const settings = getSettings();
+    const command = target
+      ? `aspire describe --apphost "${target.appHostPath}" --follow`
+      : this.othersRunning(tree.path)
+        ? isolated(this.run!.command)
+        : this.run!.command;
+    const spec: PaneSpec = {
+      cwd: tree.path,
+      program: settings.shell,
+      args: shellCommandArgs(settings.shell, command),
+      label: target ? `aspire (attached) · ${name}` : `${command} · ${name}`,
+      interruptToStop: !target,
+    };
+    const shell = this.shells()[0];
+    const pane = shell
+      ? this.open(shell, "y", { spec })
+      : this.open(this.butPane, "x", { spec, share: 1 - TUI_SHARE });
+
+    if (target) {
+      pane.addAction("■", "Stop the app (aspire stop)", () => {
+        const host = this.hostIn(tree.path);
+        if (host) void this.onStopAspire?.(host.appHostPath);
+      });
+      pane.exitAction = {
+        label: "Run here",
+        run: () => {
+          this.closeShell(pane);
+          void this.openWorktree(tree, { attach: false });
+        },
+      };
+    }
+    const dashboard = pane.addAction("◉", "Open the Aspire dashboard", () => {
+      const url = this.hostIn(tree.path)?.dashboardUrl;
+      if (url) void openUrl(url);
+    });
+    this.worktreePanes.set(tree.path, { pane, dashboard });
     this.updateRunControls();
   }
 
   private updateRunControls(): void {
     this.dashboardButton?.classList.toggle("hidden", !this.aspire?.dashboardUrl);
+    for (const [path, { dashboard }] of this.worktreePanes) {
+      dashboard.classList.toggle("hidden", !this.hostIn(path)?.dashboardUrl);
+    }
+    const running = this.worktreeHosts.length;
+    // Only a project with a run, or with something already running, has a use for the menu.
+    this.worktreeButton.classList.toggle(
+      "hidden",
+      this.worktrees.length + running === 0 || (!this.run && running === 0),
+    );
+    this.worktreeButton.classList.toggle("running", running > 0);
+    // Words rather than a glyph: there's no fork symbol that reads at this size.
+    const count = this.worktreeRows().length;
+    this.worktreeButton.textContent =
+      (running ? "◆ " : "") + `${count} worktree${count === 1 ? "" : "s"}`;
+    const names = this.worktreeHosts.map(worktreeName);
+    this.worktreeButton.title = running
+      ? `Aspire running in ${names.join(", ")} — worktrees`
+      : `Run in a worktree (${this.worktrees.length})`;
     if (!this.run) return;
     this.runButton.title = this.runPane
       ? `Go to ${this.runPane.spec.label} (Ctrl+F5)`
@@ -416,7 +642,9 @@ export class ProjectView {
     const apphost = `--apphost "${target?.appHostPath}"`;
     const logs = this.attachView === "logs";
     const command = !target
-      ? this.run.command
+      ? this.othersRunning(null)
+        ? isolated(this.run.command)
+        : this.run.command
       : logs
         ? `aspire logs ${apphost} --follow --tail 200`
         : `aspire describe ${apphost} --follow`;
@@ -570,6 +798,10 @@ export class ProjectView {
       group.element.remove();
       this.collapse(parent);
     }
+    for (const [path, entry] of this.worktreePanes) {
+      if (entry.pane === pane) this.worktreePanes.delete(path);
+    }
+    this.updateRunControls();
     if (pane === this.runPane) {
       this.runPane = null;
       this.dashboardButton = null;
