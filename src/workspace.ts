@@ -13,6 +13,23 @@ import { getSettings, shellCommandArgs, shellThenCommandArgs, type Profile } fro
 
 export type Axis = "x" | "y";
 
+/**
+ * What the layout needs of a leaf: a terminal, or the PRs & builds pane.
+ * Callbacks are methods so a pane may narrow their parameter to itself.
+ */
+export interface Pane {
+  readonly element: HTMLElement;
+  readonly tab: HTMLElement;
+  readonly actions: HTMLElement;
+  start(): Promise<void>;
+  fit(): void;
+  focus(): void;
+  setActive(active: boolean): void;
+  dispose(): void;
+  onFocus?(pane: Pane): void;
+  onClose?(pane: Pane): void;
+}
+
 /** Where a new terminal goes: a tab beside the pane, or a split right or down of it. */
 export type Placement = "tab" | Axis;
 
@@ -114,8 +131,8 @@ class Split {
  * new terminal here.
  */
 class TabGroup {
-  panes: TerminalPane[] = [];
-  selected: TerminalPane | null = null;
+  panes: Pane[] = [];
+  selected: Pane | null = null;
   parent!: Split;
   readonly element: HTMLDivElement;
   private tabs: HTMLDivElement;
@@ -150,7 +167,7 @@ class TabGroup {
     this.element.append(header, this.body);
   }
 
-  insert(pane: TerminalPane, after?: TerminalPane): void {
+  insert(pane: Pane, after?: Pane): void {
     const index = after ? this.panes.indexOf(after) + 1 : this.panes.length;
     this.panes.splice(index, 0, pane);
     this.tabs.insertBefore(pane.tab, this.tabs.children[index] ?? null);
@@ -161,7 +178,7 @@ class TabGroup {
   }
 
   /** Takes `pane` out, selecting its neighbour if it was showing. Returns that neighbour. */
-  remove(pane: TerminalPane): TerminalPane | null {
+  remove(pane: Pane): Pane | null {
     const index = this.panes.indexOf(pane);
     this.panes.splice(index, 1);
     this.element.classList.toggle("single", this.panes.length === 1);
@@ -173,7 +190,7 @@ class TabGroup {
     return this.selected;
   }
 
-  select(pane: TerminalPane): void {
+  select(pane: Pane): void {
     if (this.selected === pane) return;
     this.selected = pane;
     this.panes.forEach((p) => {
@@ -357,9 +374,9 @@ export class ProjectView {
   readonly element: HTMLDivElement;
 
   private root: Split;
-  private groups = new Map<TerminalPane, TabGroup>();
+  private groups = new Map<Pane, TabGroup>();
   private butPane: TerminalPane;
-  private activePane: TerminalPane;
+  private activePane: Pane;
   private run: RunSpec | null = null;
   private runPane: TerminalPane | null = null;
   private runButton: HTMLButtonElement;
@@ -386,9 +403,8 @@ export class ProjectView {
   private attachView: "describe" | "logs" = "describe";
   /** Set while deciding between running and attaching, so a double click opens one pane. */
   private opening = false;
-  /** The PRs & builds pane, docked right of the terminals. */
+  /** The PRs & builds pane. Kept while closed, so the tab badge keeps its count. */
   readonly prs: PrsPanel;
-  private prsGutter: HTMLDivElement;
   private prsButton: HTMLButtonElement;
 
   /** Brings `aspire` up to date before the run pane decides what to start. */
@@ -401,20 +417,11 @@ export class ProjectView {
 
     this.element = document.createElement("div");
     this.element.className = "project";
-    // The terminals' split tree gets a box of its own, so the PRs pane can dock
-    // beside it without being a leaf of the tree.
-    const layout = document.createElement("div");
-    layout.className = "project-layout";
-    this.root = new Split("x", layout);
+    this.root = new Split("x", this.element);
     this.prs = new PrsPanel(project.path);
+    this.prs.onFocus = (p) => this.setActivePane(p);
     this.prs.onClose = () => this.togglePrs(false);
     this.prs.onFix = (prompt) => this.openClaude(prompt);
-    this.prsGutter = document.createElement("div");
-    this.prsGutter.className = "gutter gutter-x";
-    this.installPrsGutter();
-    this.prs.element.classList.add("hidden");
-    this.prsGutter.classList.add("hidden");
-    this.element.append(layout, this.prsGutter, this.prs.element);
 
     this.butPane = this.makePane({
       cwd: project.path,
@@ -471,40 +478,30 @@ export class ProjectView {
     };
   }
 
-  /** Shows or hides the PRs & builds pane; with no argument, flips it. */
-  togglePrs(show = this.prs.element.classList.contains("hidden")): void {
-    this.prs.element.classList.toggle("hidden", !show);
-    this.prsGutter.classList.toggle("hidden", !show);
-    this.prsButton.classList.toggle("on", show);
-    if (show) void this.prs.refresh(false);
-    this.fitAll();
+  /**
+   * Shows or hides the PRs & builds pane; with no argument, flips it. It opens
+   * at the top of the right-hand column, above the shells, taking half the
+   * room of the pane it splits; with no shells, it takes the shell's place
+   * beside the TUI.
+   */
+  togglePrs(show = !this.prsOpen): void {
+    if (show && this.prsOpen) {
+      this.setActivePane(this.prs);
+      return;
+    }
+    if (!show) {
+      if (this.prsOpen) this.closeShell(this.prs);
+      return;
+    }
+    const top = this.shells()[0];
+    if (top) this.place(top, "y", this.prs, { before: true });
+    else this.place(this.butPane, "x", this.prs, { share: 1 - TUI_SHARE });
+    this.prsButton.classList.add("on");
+    void this.prs.start();
   }
 
   get prsOpen(): boolean {
-    return !this.prs.element.classList.contains("hidden");
-  }
-
-  /** Drags the PRs pane's width; the terminals take whatever's left. */
-  private installPrsGutter(): void {
-    const MIN = 280;
-    this.prsGutter.addEventListener("pointerdown", (down: PointerEvent) => {
-      down.preventDefault();
-      const start = this.prs.element.offsetWidth;
-      const max = this.element.offsetWidth - 300;
-      document.body.classList.add("resizing-x");
-      const onMove = (move: PointerEvent) => {
-        const width = Math.max(MIN, Math.min(max, start - (move.clientX - down.clientX)));
-        this.prs.element.style.width = `${width}px`;
-        this.fitAll();
-      };
-      const onUp = () => {
-        document.removeEventListener("pointermove", onMove);
-        document.removeEventListener("pointerup", onUp);
-        document.body.classList.remove("resizing-x");
-      };
-      document.addEventListener("pointermove", onMove);
-      document.addEventListener("pointerup", onUp);
-    });
+    return this.groups.has(this.prs);
   }
 
   /**
@@ -783,7 +780,7 @@ export class ProjectView {
    * it, the group becomes a nested split of its own.
    */
   open(
-    target: TerminalPane,
+    target: Pane,
     where: Placement,
     {
       autostart = true,
@@ -793,6 +790,29 @@ export class ProjectView {
     }: { autostart?: boolean; focus?: boolean; share?: number; spec?: PaneSpec } = {},
   ): TerminalPane {
     const pane = this.makePane(spec ?? this.profileSpec(getSettings().profiles[0]));
+    this.place(target, where, pane, { focus, share });
+
+    if (autostart) {
+      void pane.start().then(() => {
+        // Closed before it finished starting: there's nothing left to focus.
+        if (!focus || !this.groups.has(pane)) return;
+        this.setActivePane(pane);
+        pane.focus();
+      });
+    }
+    return pane;
+  }
+
+  /**
+   * Puts `pane` into the layout off `target`: as a tab beside it, or split
+   * after it (before it, with `before`) taking `share` of its group's room.
+   */
+  private place(
+    target: Pane,
+    where: Placement,
+    pane: Pane,
+    { focus = true, share = 0.5, before = false }: { focus?: boolean; share?: number; before?: boolean } = {},
+  ): void {
     const group = this.groups.get(target)!;
 
     if (where === "tab") {
@@ -811,7 +831,7 @@ export class ProjectView {
         const room = grow(group.element);
         setGrow(group.element, room * (1 - share));
         setGrow(fresh.element, room * share);
-        parent.children.splice(parent.children.indexOf(group) + 1, 0, fresh);
+        parent.children.splice(parent.children.indexOf(group) + (before ? 0 : 1), 0, fresh);
         fresh.parent = parent;
       } else {
         const nested = new Split(where);
@@ -820,7 +840,8 @@ export class ProjectView {
         parent.children[parent.children.indexOf(group)] = nested;
         setGrow(group.element, 1 - share);
         setGrow(fresh.element, share);
-        nested.children.push(group, fresh);
+        if (before) nested.children.push(fresh, group);
+        else nested.children.push(group, fresh);
         group.parent = nested;
         fresh.parent = nested;
         nested.render();
@@ -828,16 +849,6 @@ export class ProjectView {
       parent.render();
     }
     this.fitAll();
-
-    if (autostart) {
-      void pane.start().then(() => {
-        // Closed before it finished starting: there's nothing left to focus.
-        if (!focus || !this.groups.has(pane)) return;
-        this.setActivePane(pane);
-        pane.focus();
-      });
-    }
-    return pane;
   }
 
   /**
@@ -856,12 +867,13 @@ export class ProjectView {
     return this.open(this.butPane, where, { spec });
   }
 
-  closeShell(pane: TerminalPane): void {
-    if (pane === this.butPane) return;
+  closeShell(pane: Pane): void {
+    if (pane === this.butPane || !this.groups.has(pane)) return;
     const group = this.groups.get(pane)!;
     const wasActive = pane === this.activePane;
     this.groups.delete(pane);
-    let neighbour: TerminalPane | undefined;
+    if (pane === this.prs) this.prsButton.classList.remove("on");
+    let neighbour: Pane | undefined;
     if (group.panes.length > 1) {
       neighbour = group.remove(pane) ?? undefined;
       pane.dispose();
@@ -935,12 +947,12 @@ export class ProjectView {
     node.parent = parent;
   }
 
-  private firstPane(node: LayoutNode | undefined): TerminalPane | undefined {
+  private firstPane(node: LayoutNode | undefined): Pane | undefined {
     if (!node) return undefined;
     return node instanceof Split ? this.firstPane(node.children[0]) : (node.selected ?? node.panes[0]);
   }
 
-  private setActivePane(pane: TerminalPane): void {
+  private setActivePane(pane: Pane): void {
     this.activePane = pane;
     const group = this.groups.get(pane);
     group?.select(pane);
@@ -955,15 +967,16 @@ export class ProjectView {
   }
 
   /** Every pane in reading order: left to right, top to bottom, tab by tab. */
-  allPanes(): TerminalPane[] {
+  allPanes(): Pane[] {
     return this.allGroups().flatMap((g) => g.panes);
   }
 
+  /** Every terminal but the TUI, in reading order: the PRs pane isn't a shell. */
   private shells(): TerminalPane[] {
-    return this.allPanes().filter((p) => p !== this.butPane);
+    return this.allPanes().filter((p): p is TerminalPane => p instanceof TerminalPane && p !== this.butPane);
   }
 
-  get active(): TerminalPane {
+  get active(): Pane {
     return this.activePane;
   }
 
@@ -998,7 +1011,7 @@ export class ProjectView {
 
   dispose(): void {
     this.allPanes().forEach((p) => p.dispose());
-    this.prs.dispose();
+    this.prs.destroy();
     this.element.remove();
   }
 }

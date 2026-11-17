@@ -144,10 +144,12 @@ life of the process and the token for twenty minutes.
 
 ## PRs & builds
 
-`PRs` on the TUI header, or `Ctrl+Shift+P`, docks a pane to the right of the
-terminals with the repository's open pull requests and its pipelines. The
-gutter beside it drags. To have it open whenever the tab opens, set
-**PRs & builds** in the project settings.
+`PRs` on the TUI header, or `Ctrl+Shift+P`, opens a pane with the
+repository's open pull requests and its pipelines. It opens at the top of the
+right-hand column, stacked above the shells, and from there it's a pane like
+any other: its dividers drag, and it closes with its tab's `×`,
+`Ctrl+Shift+W` or `Ctrl+Shift+P` again. To have it open whenever the tab
+opens, set **PRs & builds** in the project settings.
 
 Like the build badge, it reads the provider from the git remote. An Azure
 DevOps remote uses the `az` login, and a GitHub remote uses `gh auth token`,

@@ -105,14 +105,17 @@ const unquotable = (text: string) => text.replace(/["`$\\%!]/g, "");
 
 /**
  * The PRs & builds pane: this repository's open pull requests, each with its
- * checks and votes, and the recent runs of each pipeline. Docked to the right
- * of the project's terminals rather than in the split tree, since it isn't a
- * terminal and wants a steady column of its own.
+ * checks and votes, and the recent runs of each pipeline. It's a pane like the
+ * terminals, a leaf of the split tree with a tab and header buttons of its
+ * own, so it stacks, splits and tabs the same way they do.
  */
 export class PrsPanel {
   readonly element: HTMLDivElement;
+  /** The group header's tab for this pane, as a terminal has. */
+  readonly tab: HTMLDivElement;
+  /** Header buttons, shown while this is the group's selected tab. */
+  readonly actions: HTMLDivElement;
   private body: HTMLDivElement;
-  private sourceEl: HTMLSpanElement;
   private refreshButton: HTMLButtonElement;
   private activity: Activity | null = null;
   private applied: string[] = [];
@@ -126,26 +129,42 @@ export class PrsPanel {
   onChange?: () => void;
   /** Ask Claude, in a pane of this project, to look at a failed check. */
   onFix?: (prompt: string) => void;
-  /** The × button. */
-  onClose?: () => void;
+  onFocus?(pane: PrsPanel): void;
+  /** The tab's ×, a middle-click on it, or Ctrl+Shift+W. */
+  onClose?(pane: PrsPanel): void;
 
   constructor(private readonly path: string) {
-    this.element = el("div", "prs-panel");
+    this.element = el("div", "pane prs-panel");
+    // Focusable, so Ctrl+] can land here and keys don't fall through to a terminal.
+    this.element.tabIndex = -1;
+    this.element.addEventListener("pointerdown", () => this.onFocus?.(this));
 
-    const header = el("div", "prs-header");
-    const title = el("span", "prs-title", "PRs & builds");
-    this.sourceEl = el("span", "prs-source");
+    this.tab = el("div", "pane-tab");
+    this.tab.title = "PRs & builds";
+    this.tab.append(el("span", "pane-title", "PRs & builds"));
+    this.tab.addEventListener("mousedown", (e) => {
+      if (e.button === 1) {
+        e.preventDefault();
+        this.onClose?.(this);
+        return;
+      }
+      this.onFocus?.(this);
+    });
+    const close = el("button", "tab-close", "×");
+    close.title = "Close (Ctrl+Shift+P)";
+    close.onmousedown = (e) => e.stopPropagation();
+    close.onclick = () => this.onClose?.(this);
+    this.tab.append(close);
+
+    this.actions = el("div", "pane-actions");
     this.refreshButton = el("button", "pane-btn prs-refresh", "⟳");
     this.refreshButton.title = "Refresh";
     this.refreshButton.onclick = () => void this.refresh(true);
-    const close = el("button", "pane-btn", "×");
-    close.title = "Close (Ctrl+Shift+P)";
-    close.onclick = () => this.onClose?.();
-    header.append(title, this.sourceEl, this.refreshButton, close);
+    this.actions.append(this.refreshButton);
 
     this.body = el("div", "prs-body");
     this.body.append(el("div", "prs-empty", "Loading…"));
-    this.element.append(header, this.body);
+    this.element.append(this.body);
 
     this.timer = setInterval(() => {
       if (this.visible() && document.hasFocus()) void this.refresh(false);
@@ -213,7 +232,10 @@ export class PrsPanel {
     const activity = this.activity;
     if (!activity) return;
     this.renderAge();
-    this.sourceEl.textContent = activity.source ? `· ${activity.source}` : "";
+    this.tab.title = activity.source ? `PRs & builds — ${activity.source}` : "PRs & builds";
+    (this.tab.firstChild as HTMLElement).textContent = activity.source
+      ? `PRs · ${activity.source.split(" / ").pop()}`
+      : "PRs & builds";
     this.body.replaceChildren();
 
     if (activity.error) {
@@ -436,8 +458,36 @@ export class PrsPanel {
     return square;
   }
 
+  /* The pane surface the layout expects of every leaf. */
+
+  /** Opening the pane is when it's worth asking. */
+  start(): Promise<void> {
+    return this.refresh(false);
+  }
+
+  /** Nothing to measure: it's plain HTML, not a terminal grid. */
+  fit(): void {}
+
+  focus(): void {
+    this.element.focus({ preventScroll: true });
+  }
+
+  setActive(active: boolean): void {
+    this.element.classList.toggle("active", active);
+  }
+
+  /**
+   * Taken out of the layout. The data and the refresh timer stay, so the tab
+   * badge keeps its count and reopening is instant; `destroy` ends it.
+   */
   dispose(): void {
-    clearInterval(this.timer);
     this.element.remove();
+    this.tab.remove();
+    this.actions.remove();
+  }
+
+  destroy(): void {
+    clearInterval(this.timer);
+    this.dispose();
   }
 }

@@ -164,12 +164,6 @@ body.dragging-tab * {
 .project {
   position: absolute;
   inset: 0;
-  display: flex;
-}
-
-/* The terminals' split tree, beside the docked PRs pane when it's open. */
-.project-layout {
-  flex: 1 1 0;
 }
 
 .hidden {
@@ -909,45 +903,14 @@ body.resizing-y * {
   opacity: 1;
 }
 
+/* A pane like the terminals: it fills its slot in the group body. */
 .prs-panel {
-  display: flex;
-  flex-direction: column;
-  flex: 0 0 auto;
-  width: 460px;
-  min-width: 0;
-  background: var(--bg);
-  overflow: hidden;
   user-select: text;
+  outline: none;
 }
 
-.prs-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: var(--header-h);
-  flex: 0 0 var(--header-h);
-  padding: 0 6px 0 12px;
-  background: var(--bg-raised);
-  border-bottom: 1px solid var(--border);
+.pane-btn.prs-refresh {
   font-size: 11.5px;
-  color: var(--text-dim);
-  white-space: nowrap;
-}
-
-.prs-title {
-  color: var(--text);
-}
-
-.prs-source {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.prs-header .pane-btn {
-  opacity: 0.8;
-  font-size: 12px;
 }
 
 .prs-refresh.spinning {
