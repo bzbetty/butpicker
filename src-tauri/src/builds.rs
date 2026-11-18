@@ -325,6 +325,7 @@ async fn repo_id(cache: &Mutex<Cache>, coords: &Coords, token: &str) -> Result<S
 /* ------------------------------------------------------------------ builds */
 
 struct Build {
+    id: u64,
     state: &'static str,
     pipeline: String,
     number: String,
@@ -397,6 +398,7 @@ fn parse_builds(value: &serde_json::Value) -> Vec<Build> {
     let mut builds: Vec<Build> = items
         .iter()
         .map(|item| Build {
+            id: item.get("id").and_then(serde_json::Value::as_u64).unwrap_or_default(),
             state: map_state(&text(item, "status"), &text(item, "result")),
             pipeline: item
                 .get("definition")
@@ -423,6 +425,48 @@ fn parse_builds(value: &serde_json::Value) -> Vec<Build> {
     builds
 }
 
+/// Builds held at a pipeline approval in this project, with who can approve
+/// each (identity ids). One request covers every pipeline in the project; on
+/// any failure the answer is simply "none waiting".
+pub(crate) async fn pending_approvals(
+    org_url: &str,
+    project: &str,
+    token: &str,
+) -> HashMap<u64, Vec<String>> {
+    let url = format!(
+        "{org_url}/{}/_apis/pipelines/approvals?state=pending&$expand=steps&top=200&api-version=7.1",
+        encode(project),
+    );
+    let Ok(value) = get_json(&url, token).await else {
+        return HashMap::new();
+    };
+    let list = value.get("value").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+    let mut waiting: HashMap<u64, Vec<String>> = HashMap::new();
+    for approval in list {
+        let Some(build) = approval
+            .get("pipeline")
+            .and_then(|p| p.get("owner"))
+            .and_then(|o| o.get("id"))
+            .and_then(serde_json::Value::as_u64)
+        else {
+            continue;
+        };
+        let approvers = approval
+            .get("steps")
+            .and_then(serde_json::Value::as_array)
+            .map(|steps| {
+                steps
+                    .iter()
+                    .filter(|s| s.get("status").and_then(serde_json::Value::as_str) == Some("pending"))
+                    .filter_map(|s| s.get("assignedApprover")?.get("id")?.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        waiting.entry(build).or_default().extend(approvers);
+    }
+    waiting
+}
+
 /* ----------------------------------------------------------------- command */
 
 async fn fetch(cache: &Mutex<Cache>, coords: &Coords, config: &BuildConfig) -> BuildStatus {
@@ -446,7 +490,17 @@ async fn fetch(cache: &Mutex<Cache>, coords: &Coords, config: &BuildConfig) -> B
         Err(e) => return BuildStatus::failed(&source, e),
     };
 
-    let builds = parse_builds(&value);
+    let mut builds = parse_builds(&value);
+    // A run held at an approval gate is "in progress" to Azure, but nothing is
+    // running: it's waiting on a person, often for days, and often to expire.
+    if builds.iter().any(|b| b.state == "running") {
+        let waiting = pending_approvals(&coords.org_url(), &coords.project, &token).await;
+        for build in builds.iter_mut().filter(|b| b.state == "running") {
+            if waiting.contains_key(&build.id) {
+                build.state = "waiting";
+            }
+        }
+    }
     // A red pipeline is the one worth interrupting for, even when a greener one
     // ran more recently; otherwise the newest build speaks for the repo.
     let chosen = builds

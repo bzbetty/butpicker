@@ -292,6 +292,7 @@ const BUILD_GLYPH: Partial<Record<BuildState, string>> = {
   canceled: "⊘",
   running: "●",
   queued: "◌",
+  waiting: "⏸",
   unknown: "?",
   error: "?",
 };
@@ -303,6 +304,7 @@ const BUILD_WORD: Partial<Record<BuildState, string>> = {
   canceled: "Canceled",
   running: "Running",
   queued: "Queued",
+  waiting: "Waiting for approval",
   unknown: "Finished",
 };
 

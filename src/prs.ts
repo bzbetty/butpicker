@@ -48,6 +48,7 @@ const GLYPH: Record<CheckState, string> = {
   partial: "◐",
   running: "●",
   queued: "◌",
+  waiting: "⏸",
   expired: "↻",
   canceled: "⊘",
   skipped: "–",
@@ -67,7 +68,7 @@ const POLICY_WORD: Partial<Record<CheckState, string>> = {
 function buildRollup(checks: Check[]): { state: CheckState; label: string; title: string } | null {
   const builds = checks.filter((c) => c.kind === "build");
   if (builds.length === 0) return null;
-  const order: CheckState[] = ["failed", "expired", "running", "queued", "partial", "canceled", "unknown", "succeeded", "skipped"];
+  const order: CheckState[] = ["failed", "expired", "running", "queued", "waiting", "partial", "canceled", "unknown", "succeeded", "skipped"];
   const worst = [...builds].sort((a, b) => order.indexOf(a.state) - order.indexOf(b.state))[0];
   const label = builds.length === 1 ? worst.name : `${builds.filter((b) => b.state === "succeeded" || b.state === "skipped").length}/${builds.length} checks`;
   return {
@@ -99,6 +100,12 @@ const VOTE_WORD: Record<Reviewer["vote"], string> = {
   rejected: "wants changes",
   none: "hasn't voted",
 };
+
+/** A run's state in words; a held run says what it's waiting for. */
+function runWord(run: PipelineRun): string {
+  if (run.state !== "waiting") return run.state;
+  return run.canApprove ? "⏸ awaiting approval (yours to give)" : "⏸ awaiting approval";
+}
 
 /** Characters that would end or expand the quoted prompt in pwsh, cmd or bash. */
 const unquotable = (text: string) => text.replace(/["`$\\%!]/g, "");
@@ -445,7 +452,7 @@ export class PrsPanel {
 
       const latest = pipeline.runs[0];
       const info = el("span", `prs-pipe-info ${latest?.state ?? ""}`);
-      if (latest) info.textContent = [latest.state, latest.branch, age(latest.time)].filter(Boolean).join(" · ");
+      if (latest) info.textContent = [runWord(latest), latest.branch, age(latest.time)].filter(Boolean).join(" · ");
       row.append(name, strip, info);
       this.body.append(row);
     }
@@ -453,7 +460,7 @@ export class PrsPanel {
 
   private renderRun(run: PipelineRun): HTMLElement {
     const square = el("button", `prs-run ${run.state}`);
-    square.title = [run.number, run.state, run.branch, age(run.time)].filter(Boolean).join(" · ");
+    square.title = [run.number, runWord(run), run.branch, age(run.time)].filter(Boolean).join(" · ");
     square.onclick = () => void openUrl(run.url);
     return square;
   }

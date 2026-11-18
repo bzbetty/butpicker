@@ -113,11 +113,14 @@ pub struct Pipeline {
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
+    /// As for checks, plus `waiting`: held at an approval gate.
     pub state: String,
     pub number: String,
     pub branch: String,
     pub url: String,
     pub time: Option<String>,
+    /// Waiting on an approval that you're one of the approvers for.
+    pub can_approve: bool,
 }
 
 impl Activity {
@@ -520,11 +523,22 @@ async fn azure(cache: &Prs, builds_state: &Builds, coords: Coords, remote: Strin
         pr.ready = compute_ready(pr);
     }
 
+    // Runs held at an approval gate read as in progress; ask which they are,
+    // but only when something is in progress at all.
+    let in_progress = items(&runs_value).iter().any(|b| text(b, "status") == "inProgress");
+    let waiting = if in_progress {
+        builds::pending_approvals(&org_url, &coords.project, &token).await
+    } else {
+        HashMap::new()
+    };
+
     let runs = Some(runs_value)
         .map(|v| {
             items(&v)
                 .iter()
                 .map(|b| {
+                    let id = b.get("id").and_then(Value::as_u64).unwrap_or_default();
+                    let approvers = waiting.get(&id).filter(|_| text(b, "status") == "inProgress");
                     let definition = at(b, &["definition"]);
                     let name = text(definition, "name");
                     let url = definition
@@ -533,7 +547,12 @@ async fn azure(cache: &Prs, builds_state: &Builds, coords: Coords, remote: Strin
                         .map(|id| format!("{org_url}/{project}/_build?definitionId={id}"))
                         .unwrap_or_default();
                     let run = Run {
-                        state: azure_build_state(&text(b, "status"), &text(b, "result")).into(),
+                        state: if approvers.is_some() {
+                            "waiting"
+                        } else {
+                            azure_build_state(&text(b, "status"), &text(b, "result"))
+                        }
+                        .into(),
                         number: text(b, "buildNumber"),
                         branch: short_ref(&text(b, "sourceBranch")),
                         url: text(at(b, &["_links", "web"]), "href"),
@@ -541,6 +560,7 @@ async fn azure(cache: &Prs, builds_state: &Builds, coords: Coords, remote: Strin
                             .iter()
                             .map(|k| text(b, k))
                             .find(|t| !t.is_empty()),
+                        can_approve: !me.is_empty() && approvers.is_some_and(|a| a.contains(&me)),
                     };
                     (name, url, run)
                 })
@@ -617,6 +637,8 @@ fn gh_state(status: &str, conclusion: &str) -> &'static str {
             _ => "unknown",
         },
         "in_progress" => "running",
+        // A deployment held for review, as Azure's approvals are.
+        "waiting" => "waiting",
         _ => "queued",
     }
 }
@@ -779,6 +801,7 @@ async fn github(cache: &Prs, repo: GitHubRepo, remote: String) -> Activity {
                         branch: text(r, "head_branch"),
                         url: text(r, "html_url"),
                         time: Some(text(r, "updated_at")).filter(|t| !t.is_empty()),
+                        can_approve: false,
                     };
                     (text(r, "name"), format!("{repo_url}/actions/workflows/{file}"), run)
                 })

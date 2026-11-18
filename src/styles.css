@@ -1315,6 +1315,13 @@ body.resizing-y * {
   background: #1f6feb66;
 }
 
+/* Held at an approval: a hollow square and no pulse. These sit for days and
+   often expire, so they shouldn't compete with a build that's really going. */
+.prs-run.waiting {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px #8b949e;
+}
+
 .prs-pipe-info {
   justify-self: end;
   color: var(--text-dim);

@@ -57,6 +57,7 @@ export type CheckState =
   | "partial"
   | "running"
   | "queued"
+  | "waiting"
   | "expired"
   | "canceled"
   | "skipped"
@@ -97,11 +98,14 @@ export interface PullRequest {
 }
 
 export interface PipelineRun {
+  /** `waiting` is held at an approval gate: nothing is running. */
   state: CheckState;
   number: string;
   branch: string;
   url: string;
   time: string | null;
+  /** You're one of the approvers it's waiting on. */
+  canApprove: boolean;
 }
 
 export interface Pipeline {
@@ -133,6 +137,7 @@ export type BuildState =
   | "canceled"
   | "running"
   | "queued"
+  | "waiting"
   | "unknown";
 
 export interface BuildStatus {
