@@ -480,9 +480,9 @@ export class ProjectView {
 
   /**
    * Shows or hides the PRs & builds pane; with no argument, flips it. It opens
-   * at the top of the right-hand column, above the shells, taking half the
-   * room of the pane it splits; with no shells, it takes the shell's place
-   * beside the TUI.
+   * in the right-hand column below the run pane and above the shells, taking
+   * half the room of the pane it splits; with no shells, it takes the shell's
+   * place beside the TUI.
    */
   togglePrs(show = !this.prsOpen): void {
     if (show && this.prsOpen) {
@@ -493,8 +493,10 @@ export class ProjectView {
       if (this.prsOpen) this.closeShell(this.prs);
       return;
     }
-    const top = this.shells()[0];
-    if (top) this.place(top, "y", this.prs, { before: true });
+    // Under the run pane when there is one, otherwise heading the shells, so
+    // the right-hand column reads run, PRs, shells.
+    if (this.runPane) this.place(this.runPane, "y", this.prs);
+    else if (this.shells()[0]) this.place(this.shells()[0], "y", this.prs, { before: true });
     else this.place(this.butPane, "x", this.prs, { share: 1 - TUI_SHARE });
     this.prsButton.classList.add("on");
     void this.prs.start();
@@ -733,9 +735,11 @@ export class ProjectView {
       // gets to shut down cleanly.
       interruptToStop: !target,
     };
-    const shell = this.shells()[0];
-    const pane = shell
-      ? this.open(shell, "y", { spec, focus })
+    // The run pane heads the right-hand column: above the PRs pane if that's
+    // open, otherwise above the shells.
+    const top = this.prsOpen ? this.prs : this.shells()[0];
+    const pane = top
+      ? this.open(top, "y", { spec, focus, before: true })
       : this.open(this.butPane, "x", { spec, focus, share: 1 - TUI_SHARE });
     this.runPane = pane;
 
@@ -786,11 +790,12 @@ export class ProjectView {
       autostart = true,
       focus = true,
       share = 0.5,
+      before = false,
       spec,
-    }: { autostart?: boolean; focus?: boolean; share?: number; spec?: PaneSpec } = {},
+    }: { autostart?: boolean; focus?: boolean; share?: number; before?: boolean; spec?: PaneSpec } = {},
   ): TerminalPane {
     const pane = this.makePane(spec ?? this.profileSpec(getSettings().profiles[0]));
-    this.place(target, where, pane, { focus, share });
+    this.place(target, where, pane, { focus, share, before });
 
     if (autostart) {
       void pane.start().then(() => {

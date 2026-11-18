@@ -34,7 +34,7 @@ Replaces the "Windows Terminal with one tab per repo, plus a second pane for
 ## Run pane
 
 A repository with an Aspire AppHost gets a green `▶` in its TUI header. Click
-it, or press `Ctrl+F5`, and `aspire run` starts in a pane under the first shell.
+it, or press `Ctrl+F5`, and `aspire run` starts in a pane at the top of the right-hand column.
 After that, the same button goes to that pane. Detection looks three folders
 deep for `*.AppHost.csproj`, `apphost.cs`, `apphost.ts`, or a project using
 `Aspire.AppHost.Sdk`. It skips `bin`, `obj` and `node_modules`.
@@ -145,8 +145,8 @@ life of the process and the token for twenty minutes.
 ## PRs & builds
 
 `PRs` on the TUI header, or `Ctrl+Shift+P`, opens a pane with the
-repository's open pull requests and its pipelines. It opens at the top of the
-right-hand column, stacked above the shells, and from there it's a pane like
+repository's open pull requests and its pipelines. It opens in the right-hand
+column, below the run pane and above the shells, and from there it's a pane like
 any other: its dividers drag, and it closes with its tab's `×`,
 `Ctrl+Shift+W` or `Ctrl+Shift+P` again. To have it open whenever the tab
 opens, set **PRs & builds** in the project settings.
