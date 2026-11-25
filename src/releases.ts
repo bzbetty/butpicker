@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { Release } from "./projects";
+import type { MyPr, Release } from "./projects";
 
 /**
  * Release tracking in the UI: the age-coloured chip on tabs and picker rows,
@@ -13,6 +13,11 @@ export const DEFAULT_NUDGE_DAYS = 14;
 const SNOOZE_KEY = "butpicker.releases.snooze";
 const NUDGED_KEY = "butpicker.releases.nudged";
 const LAST_KEY = "butpicker.releases.last";
+const HIDDEN_PRS_KEY = "butpicker.prs.hidden";
+const LAST_PRS_KEY = "butpicker.prs.last";
+
+/** A PR of yours with no movement this long goes in the collapsed group. */
+export const QUIET_DAYS = 30;
 
 const DAY_MS = 86_400_000;
 
@@ -119,6 +124,36 @@ export function takeNudges(releases: Release[], thresholdFor: (id: string) => nu
   return due;
 }
 
+/* ----------------------------------------------------------------- PRs */
+
+export const lastKnownPrs = (): MyPr[] => readJson<MyPr[]>(LAST_PRS_KEY, []);
+export const rememberPrs = (prs: MyPr[]) => writeJson(LAST_PRS_KEY, prs);
+
+/** PRs you've put out of sight, by key. */
+export const hiddenPrs = (): Set<string> => new Set(readJson<string[]>(HIDDEN_PRS_KEY, []));
+
+export function setPrHidden(key: string, hidden: boolean): void {
+  const all = hiddenPrs();
+  if (hidden) all.add(key);
+  else all.delete(key);
+  writeJson(HIDDEN_PRS_KEY, [...all]);
+}
+
+export function prDays(pr: MyPr): number {
+  const created = Date.parse(pr.created);
+  return Number.isNaN(created) ? 0 : Math.max(0, Math.floor((Date.now() - created) / DAY_MS));
+}
+
+/** What the tab bar counts: review requests and PRs of yours you could complete now. */
+export function prCounts(prs: MyPr[]): { review: number; ready: number } {
+  const hidden = hiddenPrs();
+  const shown = prs.filter((p) => !hidden.has(p.key));
+  return {
+    review: shown.filter((p) => p.role === "review").length,
+    ready: shown.filter((p) => p.role === "mine" && p.ready).length,
+  };
+}
+
 /* ---------------------------------------------------------------- chip */
 
 /**
@@ -181,23 +216,30 @@ const HOLD_WORD: Record<Release["hold"], string> = {
   skipped: "prod stage skipped",
 };
 
+export interface PanelData {
+  releases: Release[];
+  prs: MyPr[];
+  /** Sources that couldn't be asked, for the foot. */
+  prErrors: string[];
+  checkedAt: number | null;
+  loading: boolean;
+}
+
+/** Whether the collapsed groups are open; kept across redraws, not restarts. */
+let showQuiet = false;
+let showHidden = false;
+
 /**
- * The "not in prod" panel: every tracked project that's behind, longest
- * waiting first, with the commits waiting and what's holding them.
+ * The "waiting on you" panel: every tracked project that's behind prod,
+ * longest waiting first, then your pull requests and review requests from
+ * everywhere, open project or not.
  */
-export function renderPanel(
-  container: HTMLElement,
-  releases: Release[],
-  checkedAt: number | null,
-  loading: boolean,
-  actions: PanelActions,
-): void {
+export function renderPanel(container: HTMLElement, data: PanelData, actions: PanelActions): void {
   container.replaceChildren();
 
   const head = el("div", "rel-head");
-  head.append(el("h2", "", "Not in prod"));
-  head.append(el("span", "muted", `${releases.length} tracked project${releases.length === 1 ? "" : "s"}`));
-  const refresh = el("button", "icon-btn" + (loading ? " spinning" : ""), "⟳");
+  head.append(el("h2", "", "Waiting on you"));
+  const refresh = el("button", "icon-btn" + (data.loading ? " spinning" : ""), "⟳");
   refresh.title = "Check now";
   refresh.onclick = () => actions.refresh();
   const close = el("button", "icon-btn", "×");
@@ -208,13 +250,33 @@ export function renderPanel(
 
   const body = el("div", "rel-body");
   container.append(body);
+  renderReleases(body, data.releases, actions);
+  renderPrs(body, data.prs, actions);
 
+  const foot = el("div", "rel-foot");
+  foot.textContent = [
+    data.checkedAt
+      ? `Checked ${new Date(data.checkedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · every 5 minutes`
+      : "Not checked yet",
+    ...data.prErrors,
+  ].join(" · ");
+  container.append(foot);
+}
+
+function section(body: HTMLElement, title: string, note = ""): void {
+  const head = el("div", "rel-section", title);
+  if (note) head.append(el("span", "rel-section-note", note));
+  body.append(head);
+}
+
+function renderReleases(body: HTMLElement, releases: Release[], actions: PanelActions): void {
+  section(body, "Not in prod", releases.length ? `${releases.length} tracked` : "");
   if (releases.length === 0) {
     body.append(
       el(
         "div",
         "rel-empty",
-        "No projects are tracked yet. Turn on “Track releases” from a project's settings or its row in the picker (Ctrl+T).",
+        "No projects are tracked. Turn on “Track releases” from a project's row in the picker (Ctrl+T) or its settings.",
       ),
     );
     return;
@@ -244,12 +306,93 @@ export function renderPanel(
     line.append(name, document.createTextNode(` — ${release.error ?? "unavailable"}`));
     body.append(line);
   }
+}
 
-  const foot = el("div", "rel-foot");
-  foot.textContent = checkedAt
-    ? `Checked ${new Date(checkedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · every 5 minutes`
-    : "Not checked yet";
-  container.append(foot);
+/**
+ * Review requests first (someone's blocked on you), then yours that have
+ * moved recently, then the quiet ones collapsed, then anything you've hidden.
+ */
+function renderPrs(body: HTMLElement, prs: MyPr[], actions: PanelActions): void {
+  const hidden = hiddenPrs();
+  const shown = prs.filter((p) => !hidden.has(p.key));
+  const review = shown.filter((p) => p.role === "review");
+  const mine = shown.filter((p) => p.role === "mine");
+  // Ready or failing is news however old the PR is.
+  const active = mine.filter((p) => prDays(p) < QUIET_DAYS || p.ready || p.failing);
+  const quiet = mine.filter((p) => !active.includes(p));
+  const rank = (p: MyPr) => (p.ready ? 0 : p.failing ? 1 : 2);
+  active.sort((a, b) => rank(a) - rank(b) || prDays(b) - prDays(a));
+
+  section(body, "Review requests", review.length ? String(review.length) : "");
+  if (review.length === 0) body.append(el("div", "rel-empty small", "Nobody's waiting on your review."));
+  for (const pr of review) body.append(renderPr(pr, actions, false));
+
+  section(body, "Your pull requests", mine.length ? String(mine.length) : "");
+  if (mine.length === 0) body.append(el("div", "rel-empty small", "No open pull requests of yours."));
+  for (const pr of active) body.append(renderPr(pr, actions, false));
+
+  const toggle = (label: string, open: boolean, flip: () => void) => {
+    const button = el("button", "rel-toggle", `${open ? "▾" : "▸"} ${label}`);
+    button.onclick = () => {
+      flip();
+      actions.changed();
+    };
+    body.append(button);
+  };
+  if (quiet.length) {
+    toggle(`${quiet.length} quiet for ${QUIET_DAYS}+ days`, showQuiet, () => (showQuiet = !showQuiet));
+    if (showQuiet) for (const pr of quiet.sort((a, b) => prDays(b) - prDays(a))) body.append(renderPr(pr, actions, false));
+  }
+  const gone = prs.filter((p) => hidden.has(p.key));
+  if (gone.length) {
+    toggle(`${gone.length} hidden`, showHidden, () => (showHidden = !showHidden));
+    if (showHidden) for (const pr of gone) body.append(renderPr(pr, actions, true));
+  }
+}
+
+function renderPr(pr: MyPr, actions: PanelActions, hidden: boolean): HTMLElement {
+  const row = el("div", "inbox-pr" + (hidden ? " hidden-pr" : ""));
+  const days = prDays(pr);
+
+  const title = el("button", "inbox-title");
+  title.append(el("span", "prs-id", `${pr.provider === "azure" ? "!" : "#"}${pr.number} `), document.createTextNode(pr.title));
+  title.title = `${pr.title}\nOpen in the browser`;
+  title.onclick = () => void openUrl(pr.url);
+
+  const meta = el("div", "inbox-meta");
+  const parts = [pr.repo, pr.role === "review" ? pr.author : "", `${ageText(days)} old`].filter(Boolean);
+  meta.textContent = parts.join(" · ");
+
+  const right = el("div", "inbox-right");
+  const pill = (text: string, className: string, tip: string) => {
+    const p = el("span", `inbox-pill ${className}`, text);
+    p.title = tip;
+    right.append(p);
+  };
+  if (pr.ready) pill("Ready", "ready", "Every blocking check and vote passes");
+  else if (pr.failing) pill("✗ checks", "failing", "A build check failed");
+  if (pr.conflicts) pill("conflicts", "conflicts", "Merge conflicts with the target branch");
+  if (pr.draft) pill("draft", "", "A draft");
+  if (pr.rejected) pill("changes asked", "failing", "A reviewer wants changes");
+  else if (pr.approvals && !pr.ready) pill(`✓${pr.approvals}`, "approved", `${pr.approvals} approval${pr.approvals === 1 ? "" : "s"}`);
+
+  const buttons = el("div", "inbox-actions");
+  if (pr.local) {
+    const local = pr.local;
+    const open = el("button", "prs-btn", actions.isOpen(local) ? "Go to tab" : "Open project");
+    open.onclick = () => actions.openProject(local);
+    buttons.append(open);
+  }
+  const hide = el("button", "prs-btn", hidden ? "Unhide" : "Hide");
+  hide.title = hidden ? "Show it again" : "Keep it out of the list and the count";
+  hide.onclick = () => {
+    setPrHidden(pr.key, !hidden);
+    actions.changed();
+  };
+  buttons.append(hide);
+
+  row.append(title, right, meta, buttons);
+  return row;
 }
 
 function renderRelease(release: Release, actions: PanelActions): HTMLElement {
@@ -285,14 +428,15 @@ function renderRelease(release: Release, actions: PanelActions): HTMLElement {
 
   if (release.commits.length) {
     const list = el("ul", "rel-commits");
-    for (const commit of release.commits.slice(0, 8)) {
+    // Five is enough to recognise the work; the PRs below shouldn't scroll away.
+    for (const commit of release.commits.slice(0, 5)) {
       const item = el("li");
       item.append(el("span", "sha mono", commit.sha.slice(0, 7)), el("span", "msg", commit.message));
       item.append(el("span", "who", commit.author.split(/\s+/)[0] ?? ""));
       item.title = `${commit.sha}\n${commit.author}\n${commit.message}`;
       list.append(item);
     }
-    if (release.commits.length > 8) list.append(el("li", "more", `+${release.commits.length - 8} more`));
+    if (release.commits.length > 5) list.append(el("li", "more", `+${release.commits.length - 5} more`));
     card.append(list);
   }
   if (release.error) card.append(el("div", "rel-warn", release.error));

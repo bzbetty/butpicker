@@ -246,6 +246,59 @@ export const emptyRunConfig = (): RunConfig => ({ mode: null, command: null });
 export const emptyPrsConfig = (): PrsConfig => ({ open: null });
 export const emptyReleasesConfig = (): ReleasesConfig => ({ track: null, environment: null, nudgeDays: null });
 
+/** One of your open pull requests, from anywhere. */
+export interface MyPr {
+  /** Stable across polls: `azure:Enlighten:7132`, `github:owner/repo#12`. */
+  key: string;
+  provider: "azure" | "github";
+  number: number;
+  title: string;
+  url: string;
+  repo: string;
+  /** The Azure team project, or the GitHub owner. */
+  group: string;
+  author: string;
+  created: string;
+  /** `review`: waiting on your vote. */
+  role: "mine" | "review";
+  draft: boolean;
+  conflicts: boolean;
+  ready: boolean;
+  failing: boolean;
+  /** Whether checks were asked for (young PRs of yours only). */
+  checked: boolean;
+  approvals: number;
+  rejected: boolean;
+  /** The scanned project it's cloned at, if any. */
+  local: string | null;
+}
+
+export interface MyPrs {
+  prs: MyPr[];
+  errors: string[];
+}
+
+export interface PipelineOption {
+  id: number;
+  name: string;
+}
+
+/** What the settings sheet offers to pick from, and where the coordinates come from. */
+export interface AzureOptions {
+  source: string;
+  /** `[org, project, repo]` from the remote alone. */
+  detected: string[];
+  remote: string;
+  pipelines: PipelineOption[];
+  environments: string[];
+  error: string | null;
+}
+
+/** Your PRs and review requests everywhere. `paths` say which orgs to ask and what's cloned. */
+export const myPrs = (paths: string[], force: boolean) => invoke<MyPrs>("my_prs", { paths, force });
+export const azureOptions = (path: string, config: BuildConfig) =>
+  invoke<AzureOptions>("azure_options", { path, config });
+
 /** Every tracked project against its prod environment. `force` skips the few minutes' cache. */
 export const releasesAll = (force: boolean) => invoke<Release[]>("releases_all", { force });
 

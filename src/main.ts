@@ -7,6 +7,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   aspireRunning,
   aspireStop,
+  azureOptions,
   buildStatus,
   detectRun,
   emptyBuildConfig,
@@ -18,6 +19,7 @@ import {
   matchesSubsequence,
   projectSettingsAll,
   projectStatus,
+  myPrs,
   releasesAll,
   saveProjectSettings,
   saveSession,
@@ -26,6 +28,7 @@ import {
   type Project,
   type ProjectSettings,
   type ProjectStatus,
+  type MyPr,
   type Release,
   type RunningAppHost,
   worktreeName,
@@ -36,9 +39,12 @@ import {
   daysWaiting,
   DEFAULT_NUDGE_DAYS,
   lastKnown,
+  lastKnownPrs,
   needsAttention,
+  prCounts,
   releaseChip,
   remember,
+  rememberPrs,
   renderPanel,
   showNudge,
   takeNudges,
@@ -294,7 +300,7 @@ function startStatusPolling(): void {
 // were using, not leave keystrokes going nowhere.
 window.addEventListener("focus", () => {
   void refreshStatuses();
-  void refreshReleases(false);
+  refreshWaiting(false);
   if (modalEl.classList.contains("hidden")) currentView()?.active.focus();
 });
 
@@ -318,6 +324,39 @@ const RELEASES_POLL_MS = 5 * 60_000;
 const releaseFor = (id: string) => releases.find((r) => r.id === id);
 
 const nudgeDaysFor = (id: string) => projectSettingsFor(id).releases.nudgeDays ?? DEFAULT_NUDGE_DAYS;
+
+/** Your PRs and review requests everywhere, and the sources that couldn't be asked. */
+let prs: MyPr[] = lastKnownPrs();
+let prErrors: string[] = [];
+let prsCheckedAt: number | null = null;
+let prsLoading = false;
+/** Every scanned project's path: they say which Azure orgs to ask and what's cloned. */
+let knownPaths: string[] = [];
+
+async function refreshPrs(force: boolean): Promise<void> {
+  if (prsLoading || knownPaths.length === 0) return;
+  if (!force && prsCheckedAt && Date.now() - prsCheckedAt < RELEASES_POLL_MS) return;
+  prsLoading = true;
+  renderReleases();
+  try {
+    const answer = await myPrs(knownPaths, force);
+    prs = answer.prs;
+    prErrors = answer.errors;
+    prsCheckedAt = Date.now();
+    rememberPrs(prs);
+  } catch (err) {
+    prErrors = [String(err)];
+  } finally {
+    prsLoading = false;
+  }
+  renderReleases();
+}
+
+/** Both halves of the panel; what the ⟳ button and the poll ask for. */
+function refreshWaiting(force: boolean): void {
+  void refreshReleases(force);
+  void refreshPrs(force);
+}
 
 async function refreshReleases(force: boolean): Promise<void> {
   if (releasesLoading) return;
@@ -358,25 +397,38 @@ let redrawPicker: (() => void) | null = null;
 
 /** The tab bar's count of tracked projects behind prod, and the panel if it's open. */
 function renderReleases(): void {
-  releasesBtn.classList.toggle("hidden", releases.length === 0);
   const waiting = releases.filter(needsAttention);
   const oldest = Math.max(0, ...waiting.map(daysWaiting));
-  releasesBtn.replaceChildren();
-  if (waiting.length) {
-    releasesBtn.className = `rel-btn ${ageClass(oldest)}`;
-    const sub = document.createElement("span");
-    sub.className = "sub";
-    sub.textContent = ` · oldest ${ageText(oldest)}`;
-    releasesBtn.append(`⇡ ${waiting.length} not in prod`, sub);
-    releasesBtn.title = waiting.map((r) => `${r.name} — waiting ${ageText(daysWaiting(r))}`).join("\n");
-  } else {
-    releasesBtn.className = "rel-btn age-clear";
-    releasesBtn.textContent = "✓ in prod";
-    releasesBtn.title = "Every tracked project is level with prod";
-  }
+  const counts = prCounts(prs);
+  // The colour is the releases' age when any are behind; review requests
+  // otherwise read as blue, the "someone needs you" colour.
+  const tone = waiting.length ? ageClass(oldest) : counts.review ? "age-fresh" : "age-clear";
+  releasesBtn.className = `rel-btn ${tone}`;
   releasesBtn.classList.toggle("on", !releasesPop.classList.contains("hidden"));
+  const parts: string[] = [];
+  if (waiting.length) parts.push(`⇡ ${waiting.length} not in prod · ${ageText(oldest)}`);
+  if (counts.review) parts.push(`${counts.review} to review`);
+  if (counts.ready) parts.push(`${counts.ready} ready`);
+  releasesBtn.textContent = parts.length ? parts.join("  ·  ") : "✓ Nothing waiting";
+  releasesBtn.title = [
+    ...waiting.map((r) => `${r.name} — not in prod for ${ageText(daysWaiting(r))}`),
+    counts.review ? `${counts.review} review request${counts.review === 1 ? "" : "s"}` : "",
+    counts.ready ? `${counts.ready} of your PRs ready to complete` : "",
+    "Click for everything waiting on you",
+  ]
+    .filter(Boolean)
+    .join("\n");
   if (!releasesPop.classList.contains("hidden")) {
-    renderPanel(releasesPop, releases, releasesCheckedAt, releasesLoading, {
+    // The older of the two answers is how fresh the panel is.
+    const times = [releasesCheckedAt, prsCheckedAt].filter((t): t is number => t !== null);
+    const data = {
+      releases,
+      prs,
+      prErrors,
+      checkedAt: times.length ? Math.min(...times) : null,
+      loading: releasesLoading || prsLoading,
+    };
+    renderPanel(releasesPop, data, {
       isOpen: (id) => views.has(id),
       openProject: (id) => {
         toggleReleases(false);
@@ -386,7 +438,7 @@ function renderReleases(): void {
         toggleReleases(false);
         showProjectSettings(id);
       },
-      refresh: () => void refreshReleases(true),
+      refresh: () => refreshWaiting(true),
       close: () => toggleReleases(false),
       changed: () => {
         renderReleases();
@@ -399,7 +451,7 @@ function renderReleases(): void {
 function toggleReleases(open = releasesPop.classList.contains("hidden")): void {
   releasesPop.classList.toggle("hidden", !open);
   renderReleases();
-  if (open) void refreshReleases(false);
+  if (open) refreshWaiting(false);
   else currentView()?.active.focus();
 }
 
@@ -667,15 +719,35 @@ function shiftActiveTab(direction: 1 | -1): void {
 
 /* ------------------------------------------------------------------- modal */
 
+/**
+ * A sheet with edits in it can refuse a close (Esc, ×, a backdrop click) by
+ * returning false, so unsaved changes take a second Esc to throw away.
+ */
+let modalGuard: (() => boolean) | null = null;
+/** Where a sheet goes back to when it's dismissed: the picker, for settings opened from it. */
+let modalBack: (() => void) | null = null;
+
+function requestCloseModal(): void {
+  if (modalGuard && !modalGuard()) return;
+  const back = modalBack;
+  closeModal();
+  back?.();
+}
+
 function closeModal(): void {
   redrawPicker = null;
+  modalGuard = null;
+  modalBack = null;
   modalEl.classList.add("hidden");
   modalEl.replaceChildren();
   if (activeId) views.get(activeId)?.active.focus();
 }
 
-function openModal(build: (body: HTMLDivElement) => void, title: string): HTMLDivElement {
+/** `build` fills the body, and may hand back a footer that stays put while the body scrolls. */
+function openModal(build: (body: HTMLDivElement) => HTMLElement | void, title: string): HTMLDivElement {
   redrawPicker = null;
+  modalGuard = null;
+  modalBack = null;
   modalEl.replaceChildren();
   const sheet = document.createElement("div");
   sheet.className = "sheet";
@@ -687,18 +759,19 @@ function openModal(build: (body: HTMLDivElement) => void, title: string): HTMLDi
   const dismiss = document.createElement("button");
   dismiss.className = "sheet-close";
   dismiss.textContent = "×";
-  dismiss.onclick = closeModal;
+  dismiss.onclick = requestCloseModal;
   header.append(heading, dismiss);
 
   const body = document.createElement("div");
   body.className = "sheet-body";
-  build(body);
+  const footer = build(body);
 
   sheet.append(header, body);
+  if (footer) sheet.append(footer);
   modalEl.appendChild(sheet);
   modalEl.classList.remove("hidden");
   modalEl.onclick = (e) => {
-    if (e.target === modalEl) closeModal();
+    if (e.target === modalEl) requestCloseModal();
   };
   return body;
 }
@@ -709,6 +782,7 @@ async function showProjectPicker(): Promise<void> {
   let loadError: string | null = null;
   try {
     projects = await listProjects(root);
+    knownPaths = projects.map((p) => p.path);
   } catch (err) {
     loadError = String(err);
   }
@@ -783,7 +857,9 @@ async function showProjectPicker(): Promise<void> {
             draw(filter.value);
           });
         }
-        rowButton("⚙", "Project settings", () => showProjectSettings(project.id));
+        rowButton("⚙", "Project settings", () =>
+          showProjectSettings(project.id, { back: () => void showProjectPicker() }),
+        );
         list.appendChild(row);
       });
     };
@@ -871,27 +947,33 @@ function buildSummary(build: BuildStatus | undefined): string {
 
 /**
  * A project's settings, open or not: release tracking is set from the picker
- * for projects that aren't. A closed project just has less to show about
- * itself (no build poll, no detected run command).
+ * for projects that aren't. Grouped by what each setting drives, with the
+ * Azure DevOps coordinates (needed only when detection is wrong) folded away
+ * behind the line that says what was detected. Enter saves; Esc asks before
+ * throwing edits away. `back` is where Cancel and Save return to.
  */
-function showProjectSettings(id: string): void {
+function showProjectSettings(id: string, opts: { back?: () => void } = {}): void {
   const view = views.get(id);
-  const current = projectSettingsFor(id).builds;
-  const currentRun = projectSettingsFor(id).run;
-  const currentPrs = projectSettingsFor(id).prs;
-  const currentReleases = projectSettingsFor(id).releases;
+  const { builds: current, run: currentRun, prs: currentPrs, releases: currentReleases } = projectSettingsFor(id);
   const detectedCommand = detectedRun.get(id) ?? null;
   const build = builds.get(id);
-  // `org / project / repo` as the poll resolved it, so the override boxes can
-  // show what they'd be overriding.
-  const detected = (build?.source ?? "").split(" / ");
+  const name = view?.project.name ?? folderName(id);
 
   openModal((body) => {
     const form = document.createElement("div");
     form.className = "form";
+    body.appendChild(form);
 
-    const field = (label: string, hint: string, control: HTMLElement): void => {
-      const row = document.createElement("label");
+    const section = (title: string): void => {
+      const head = document.createElement("div");
+      head.className = "form-sep";
+      head.textContent = title;
+      form.appendChild(head);
+    };
+
+    /** A label row, or a plain div for controls a label would misdirect clicks in (lists). */
+    const field = (label: string, hint: string, control: HTMLElement, asLabel = true): HTMLElement => {
+      const row = document.createElement(asLabel ? "label" : "div");
       row.className = "form-row";
       const heading = document.createElement("div");
       heading.className = "form-label";
@@ -902,6 +984,15 @@ function showProjectSettings(id: string): void {
       heading.appendChild(note);
       row.append(heading, control);
       form.appendChild(row);
+      return row;
+    };
+
+    const note = (text: string): HTMLParagraphElement => {
+      const p = document.createElement("p");
+      p.className = "form-note";
+      p.textContent = text;
+      form.appendChild(p);
+      return p;
     };
 
     const textbox = (value: string | null, placeholder: string): HTMLInputElement => {
@@ -913,132 +1004,265 @@ function showProjectSettings(id: string): void {
       return el;
     };
 
-    const select = (options: string[][]): HTMLSelectElement => {
+    const select = (options: string[][], value: string): HTMLSelectElement => {
       const el = document.createElement("select");
       el.className = "form-input";
-      for (const [value, label] of options) {
+      for (const [v, label] of options) {
         const option = document.createElement("option");
-        option.value = value;
+        option.value = v;
         option.textContent = label;
         el.appendChild(option);
       }
+      el.value = value;
       return el;
     };
 
-    const runMode = select([
-      ["button", "A ▶ button on the TUI"],
-      ["auto", "Start when the tab opens"],
-      ["off", "Off"],
-    ]);
-    runMode.value = currentRun.mode ?? "button";
-    const runCommand = textbox(currentRun.command, detectedCommand ?? "e.g. npm run dev");
+    /** An on/off switch; returns the checkbox inside it. */
+    const toggle = (checked: boolean): [HTMLElement, HTMLInputElement] => {
+      const wrap = document.createElement("span");
+      wrap.className = "toggle";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = checked;
+      wrap.append(input, Object.assign(document.createElement("span"), { className: "toggle-track" }));
+      return [wrap, input];
+    };
 
+    /* Where the Azure DevOps coordinates come from. Most projects never
+       need the overrides, so they stay folded until asked for or in use. */
+    const sourceRow = document.createElement("div");
+    sourceRow.className = "form-source";
+    const sourceText = document.createElement("span");
+    sourceText.className = "form-source-text";
+    sourceText.textContent = "Azure DevOps: looking…";
+    const change = document.createElement("button");
+    change.className = "link-btn";
+    change.type = "button";
+    sourceRow.append(sourceText, change);
+    form.appendChild(sourceRow);
+
+    const overrides = document.createElement("div");
+    overrides.className = "form form-overrides";
+    form.appendChild(overrides);
+    const overridden = [current.organization, current.project, current.repository].some(Boolean);
+    const setOverridesOpen = (open: boolean) => {
+      overrides.classList.toggle("hidden", !open);
+      change.textContent = open ? "Hide overrides" : "Change…";
+    };
+    setOverridesOpen(overridden);
+    change.onclick = () => setOverridesOpen(overrides.classList.contains("hidden"));
+
+    const organization = textbox(current.organization, "from the remote");
+    const project = textbox(current.project, "from the remote");
+    const repository = textbox(current.repository, "from the remote");
+    // Rows go into the fold, not the main form.
+    const fold = (label: string, hint: string, control: HTMLElement) => overrides.appendChild(field(label, hint, control));
+    fold("Organisation", "dev.azure.com/<organisation>", organization);
+    fold("Project", "The team project the pipelines live in.", project);
+    fold("Repository", "The repository's name in Azure DevOps.", repository);
+
+    section("Run");
+    const runMode = select(
+      [
+        ["button", "A ▶ button on the TUI"],
+        ["auto", "Start when the tab opens"],
+        ["off", "Off"],
+      ],
+      currentRun.mode ?? "button",
+    );
+    const runCommand = textbox(currentRun.command, detectedCommand ?? "e.g. npm run dev");
     field(
       "Run",
-      detectedCommand
-        ? "Found an Aspire AppHost. Runs in a pane on the right."
-        : "A long-running command, in a pane on the right.",
+      detectedCommand ? "Found an Aspire AppHost. Runs in a pane on the right." : "A long-running command, in a pane on the right.",
       runMode,
     );
-    field("Run command", "Through your shell. Blank uses what was detected.", runCommand);
+    const commandRow = field("Command", "Through your shell. Blank uses what was detected.", runCommand);
 
-    const prsMode = select([
-      ["closed", "Closed until Ctrl+Shift+P"],
-      ["open", "Open when the tab opens"],
-    ]);
-    prsMode.value = currentPrs.open ? "open" : "closed";
-    field("PRs & builds", "Open PRs, their checks, and recent pipeline runs, from the remote.", prsMode);
+    section("PRs & builds");
+    const [prsToggle, prsOpen] = toggle(currentPrs.open === true);
+    field("Open with the tab", "The PRs & builds pane opens when the tab does. Ctrl+Shift+P either way.", prsToggle);
+    const badgeMode = select(
+      [
+        ["auto", "Auto — on for Azure DevOps"],
+        ["on", "Always on"],
+        ["off", "Off"],
+      ],
+      current.enabled === null ? "auto" : current.enabled ? "on" : "off",
+    );
+    field("Build badge", "The latest build, on the tab.", badgeMode);
 
-    const mode = select([
-      ["auto", "Auto — on when the remote is Azure DevOps"],
-      ["on", "Always on"],
-      ["off", "Off"],
-    ]);
-    mode.value = current.enabled === null ? "auto" : current.enabled ? "on" : "off";
-
-    const organization = textbox(current.organization, detected[0] || "from the remote");
-    const project = textbox(current.project, detected[1] || "from the remote");
-    const repository = textbox(current.repository, detected[2] || "from the remote");
-    const definitions = textbox(current.definitions.join(", "), "every pipeline building this repo");
+    // Pipelines: ticked by name once Azure answers; ids typed by hand until then.
+    const picked = new Set(current.definitions);
+    const pipelinesBox = document.createElement("div");
+    pipelinesBox.className = "pick-list";
+    const idsBox = textbox(current.definitions.join(", "), "every pipeline building this repo");
+    pipelinesBox.appendChild(idsBox);
+    let pipelinesListed = false;
+    const pipelinesRow = field("Pipelines", "None ticked follows every pipeline that builds this repository.", pipelinesBox, false);
     const branch = textbox(current.branch, "whichever branch built last");
+    const branchRow = field("Branch", "Only report builds of this branch.", branch);
+    if (view) note(buildSummary(build));
 
-    field("Build badge", "A third badge with the latest Azure DevOps build.", mode);
-    field("Organisation", "dev.azure.com/<organisation>", organization);
-    field("Project", "The team project the pipelines live in.", project);
-    field("Repository", "The repository name in Azure DevOps.", repository);
-    field("Pipelines", "Definition ids, comma separated. Blank finds them by repository.", definitions);
-    field("Branch", "Only report builds of this branch.", branch);
-
-    const releasesHead = document.createElement("div");
-    releasesHead.className = "form-sep";
-    releasesHead.textContent = "Releases";
-    form.appendChild(releasesHead);
-
-    const trackMode = select([
-      ["off", "Off"],
-      ["on", "Show what isn't in prod"],
-    ]);
-    trackMode.value = currentReleases.track ? "on" : "off";
+    section("Releases");
+    const [trackToggle, track] = toggle(currentReleases.track === true);
+    field("Track releases", "What's on the default branch but not in prod. Watched whether or not the project is open.", trackToggle);
     const environment = textbox(currentReleases.environment, "Production");
-    const nudge = select([
-      ["", `After ${DEFAULT_NUDGE_DAYS} days`],
-      ["7", "After 7 days"],
-      ["30", "After 30 days"],
-      ["0", "Never"],
-    ]);
-    nudge.value = currentReleases.nudgeDays === null ? "" : String(currentReleases.nudgeDays);
-    field("Track releases", "Watched whether or not the project is open.", trackMode);
-    field("Environment", "The Azure DevOps environment that counts as prod.", environment);
-    field("Nudge", "A notification once the oldest unreleased work is this old.", nudge);
-    body.appendChild(form);
+    const environments = document.createElement("datalist");
+    environments.id = "environment-options";
+    environment.setAttribute("list", environments.id);
+    body.appendChild(environments);
+    const environmentRow = field("Environment", "The Azure DevOps environment that counts as prod.", environment);
+    const nudge = select(
+      [
+        ["", `After ${DEFAULT_NUDGE_DAYS} days`],
+        ["7", "After 7 days"],
+        ["30", "After 30 days"],
+        ["0", "Never"],
+      ],
+      currentReleases.nudgeDays === null ? "" : String(currentReleases.nudgeDays),
+    );
+    const nudgeRow = field("Nudge", "A notification once the oldest unreleased work is this old.", nudge);
+    note(releaseSummary(releaseFor(id), currentReleases.track === true));
 
-    // Only an open project has its build polled.
-    if (view) {
-      const status = document.createElement("p");
-      status.className = "muted form-note";
-      status.textContent = buildSummary(build);
-      body.appendChild(status);
-    }
+    /* Settings that only matter when another is on say so by greying out. */
+    const sync = () => {
+      const setOff = (row: HTMLElement, off: boolean) => {
+        row.classList.toggle("disabled", off);
+        row.querySelectorAll("input, select").forEach((c) => ((c as HTMLInputElement).disabled = off));
+      };
+      setOff(commandRow, runMode.value === "off");
+      setOff(pipelinesRow, badgeMode.value === "off");
+      setOff(branchRow, badgeMode.value === "off");
+      setOff(environmentRow, !track.checked);
+      setOff(nudgeRow, !track.checked);
+    };
+    form.addEventListener("change", sync);
+    sync();
 
-    const releaseNote = document.createElement("p");
-    releaseNote.className = "muted form-note";
-    releaseNote.textContent = releaseSummary(releaseFor(id), currentReleases.track === true);
-    body.appendChild(releaseNote);
-
-    const actions = document.createElement("div");
-    actions.className = "sheet-actions end";
-    const save = document.createElement("button");
-    save.className = "btn primary";
-    save.textContent = "Save";
-    save.onclick = async () => {
-      const next: ProjectSettings = {
-        builds: {
-          enabled: mode.value === "auto" ? null : mode.value === "on",
-          organization: trimmed(organization.value),
-          project: trimmed(project.value),
-          repository: trimmed(repository.value),
-          // Anything that isn't a positive integer was never a definition id.
-          definitions: definitions.value
+    const collectBuilds = () => ({
+      enabled: badgeMode.value === "auto" ? null : badgeMode.value === "on",
+      organization: trimmed(organization.value),
+      project: trimmed(project.value),
+      repository: trimmed(repository.value),
+      definitions: pipelinesListed
+        ? [...picked].sort((a, b) => a - b)
+        : // Anything that isn't a positive integer was never a definition id.
+          idsBox.value
             .split(/[\s,]+/)
             .map(Number)
             .filter((n) => Number.isInteger(n) && n > 0),
-          branch: trimmed(branch.value),
-        },
-        run: {
-          // A button is the default, so it's stored as no choice at all.
-          mode: runMode.value === "button" ? null : (runMode.value as "auto" | "off"),
-          command: trimmed(runCommand.value),
-        },
-        // Closed is the default, so it's stored as no choice at all.
-        prs: { open: prsMode.value === "open" ? true : null },
-        // Off and the defaults are stored as no choice at all.
-        releases: {
-          track: trackMode.value === "on" ? true : null,
-          environment: trimmed(environment.value),
-          nudgeDays: nudge.value === "" ? null : Number(nudge.value),
-        },
-      };
+      branch: trimmed(branch.value),
+    });
+
+    const collect = (): ProjectSettings => ({
+      builds: collectBuilds(),
+      run: {
+        // A button is the default, so it's stored as no choice at all.
+        mode: runMode.value === "button" ? null : (runMode.value as "auto" | "off"),
+        command: trimmed(runCommand.value),
+      },
+      // Off and the defaults are stored as no choice at all.
+      prs: { open: prsOpen.checked ? true : null },
+      releases: {
+        track: track.checked ? true : null,
+        environment: trimmed(environment.value),
+        nudgeDays: nudge.value === "" ? null : Number(nudge.value),
+      },
+    });
+
+    /* Ask Azure what there is to pick from, and say where the coordinates came
+       from. Again when an override changes, since that changes the answer. */
+    let asked = 0;
+    const loadOptions = async () => {
+      const ticket = ++asked;
+      const options = await azureOptions(id, collectBuilds()).catch((err) => ({
+        source: "",
+        detected: [] as string[],
+        remote: "",
+        pipelines: [],
+        environments: [] as string[],
+        error: String(err),
+      }));
+      if (ticket !== asked) return;
+      const [org, proj, repo] = options.detected;
+      organization.placeholder = org || "from the remote";
+      project.placeholder = proj || "from the remote";
+      repository.placeholder = repo || "from the remote";
+      const anyOverride = [organization.value, project.value, repository.value].some((v) => v.trim());
+      sourceText.replaceChildren();
+      const label = document.createElement("b");
+      label.textContent = "Azure DevOps ";
+      sourceText.append(label, options.source || "not found");
+      const from = document.createElement("span");
+      from.className = "muted";
+      from.textContent = options.source
+        ? anyOverride
+          ? " · overridden here"
+          : ` · from ${options.remote || "the remote"}`
+        : "";
+      sourceText.appendChild(from);
+      if (options.error) {
+        const err = document.createElement("div");
+        err.className = "form-source-error";
+        err.textContent = options.error;
+        sourceText.appendChild(err);
+        if (!options.source) setOverridesOpen(true);
+      }
+
+      environments.replaceChildren(
+        ...options.environments.map((e) => Object.assign(document.createElement("option"), { value: e })),
+      );
+
+      if (options.pipelines.length) {
+        pipelinesListed = true;
+        pipelinesBox.replaceChildren();
+        for (const p of options.pipelines) {
+          const item = document.createElement("label");
+          item.className = "pick";
+          const box = document.createElement("input");
+          box.type = "checkbox";
+          box.checked = picked.has(p.id);
+          box.onchange = () => (box.checked ? picked.add(p.id) : picked.delete(p.id));
+          item.append(box, document.createTextNode(` ${p.name}`));
+          item.title = `Definition ${p.id}`;
+          pipelinesBox.appendChild(item);
+        }
+        sync();
+      }
+    };
+    for (const box of [organization, project, repository]) box.addEventListener("change", () => void loadOptions());
+    void loadOptions();
+
+    /* Footer: stays in view however far the body scrolls. */
+    const footer = document.createElement("div");
+    footer.className = "sheet-footer";
+    const hint = document.createElement("span");
+    hint.className = "sheet-hint";
+    hint.textContent = "Enter saves · Esc cancels";
+    const cancel = document.createElement("button");
+    cancel.className = "btn";
+    cancel.textContent = "Cancel";
+    cancel.onclick = requestCloseModal;
+    const saveButton = document.createElement("button");
+    saveButton.className = "btn primary";
+    saveButton.textContent = "Save";
+    footer.append(hint, cancel, saveButton);
+
+    const initial = JSON.stringify(collect());
+    let discardArmed = false;
+    modalGuard = () => {
+      if (discardArmed || JSON.stringify(collect()) === initial) return true;
+      discardArmed = true;
+      hint.textContent = "Unsaved changes — Esc again to discard";
+      hint.classList.add("warn");
+      return false;
+    };
+    modalBack = opts.back ?? null;
+
+    const save = async () => {
+      const next = collect();
       projectSettings.set(id, next);
+      const back = opts.back;
       closeModal();
       if (view) {
         view.configureRun(runSpecFor(id));
@@ -1050,22 +1274,26 @@ function showProjectSettings(id: string): void {
       builds.delete(id);
       lastPolled.delete(id);
       renderTabs();
+      back?.();
       await saveProjectSettings(id, next).catch(showFatal);
       const releasesChanged = JSON.stringify(next.releases) !== JSON.stringify(currentReleases);
-      // The build overrides also say where a project's releases are read from.
+      // The overrides also say where releases and PRs are read from.
       const coordsChanged = JSON.stringify(next.builds) !== JSON.stringify(current);
       if (releasesChanged || (next.releases.track && coordsChanged)) await refreshReleases(true);
+      if (coordsChanged) void view?.prs.refresh(true);
       await refreshStatuses();
     };
-    const cancel = document.createElement("button");
-    cancel.className = "btn";
-    cancel.textContent = "Cancel";
-    cancel.onclick = closeModal;
-    actions.append(save, cancel);
-    body.appendChild(actions);
+    saveButton.onclick = () => void save();
+    body.addEventListener("keydown", (e) => {
+      const target = e.target as HTMLElement;
+      if (e.key !== "Enter" || e.isComposing || target.tagName === "BUTTON") return;
+      e.preventDefault();
+      void save();
+    });
 
     setTimeout(() => runMode.focus(), 0);
-  }, `${view?.project.name ?? folderName(id)} settings`);
+    return footer;
+  }, `${name} settings`);
 }
 
 /** Where the release tracker last left this project, in a sentence. */
@@ -1151,7 +1379,7 @@ window.addEventListener(
 
 window.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (!modalEl.classList.contains("hidden")) closeModal();
+  if (!modalEl.classList.contains("hidden")) requestCloseModal();
   else if (!releasesPop.classList.contains("hidden")) toggleReleases(false);
 });
 
@@ -1218,6 +1446,7 @@ async function boot(): Promise<void> {
     projectSettings.set(id, settings);
   }
   const projects = await listProjects(getSettings().scanRoot);
+  knownPaths = projects.map((p) => p.path);
   if (await restoreSession(projects)) return;
   emptyEl.classList.remove("hidden");
   void showProjectPicker();
@@ -1229,9 +1458,9 @@ async function boot(): Promise<void> {
  */
 function startReleasePolling(): void {
   renderReleases();
-  void refreshReleases(false);
+  refreshWaiting(false);
   setInterval(() => {
-    if (document.hasFocus()) void refreshReleases(false);
+    if (document.hasFocus()) refreshWaiting(false);
   }, 60_000);
 }
 
