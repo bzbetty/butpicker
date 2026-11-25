@@ -1335,3 +1335,366 @@ body.resizing-y * {
 .prs-pipe-info.failed {
   color: #ff7b72;
 }
+
+/* -------------------------------------------------------------- releases */
+
+/* Colour is age, not count: a day is normal, a fortnight is drift. */
+.age-fresh {
+  background: #1f6feb26;
+  color: #79c0ff;
+}
+
+.age-stale {
+  background: #9e6a0333;
+  color: #e3b341;
+}
+
+.age-old {
+  background: #f8514926;
+  color: #ff7b72;
+}
+
+.age-clear {
+  background: #2ea04326;
+  color: #3fb950;
+}
+
+.badge.release {
+  cursor: pointer;
+}
+
+.badge.release:hover {
+  filter: brightness(1.3);
+}
+
+.badge.snoozed,
+.badge.release.unknown {
+  background: #6e768133;
+  color: var(--text-dim);
+}
+
+/* The tab bar's count, covering every tracked project, open or not. */
+.rel-btn {
+  align-self: center;
+  margin-right: 12px;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.rel-btn:hover,
+.rel-btn.on {
+  filter: brightness(1.25);
+  border-color: currentColor;
+}
+
+.rel-btn .sub {
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.rel-pop {
+  position: fixed;
+  top: calc(var(--tabbar-h) + 6px);
+  right: 10px;
+  z-index: 9;
+  width: min(580px, calc(100vw - 20px));
+  max-height: calc(100vh - var(--tabbar-h) - 24px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised);
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  box-shadow: 0 16px 48px #000c;
+  overflow: hidden;
+  user-select: text;
+}
+
+.rel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rel-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.rel-head .muted {
+  font-size: 11.5px;
+}
+
+.icon-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: #30363d;
+  color: var(--text);
+}
+
+.icon-btn.spinning {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.rel-body {
+  overflow-y: auto;
+  padding: 2px 0 6px;
+}
+
+.rel-empty {
+  padding: 18px 14px;
+  color: var(--text-dim);
+}
+
+.rel {
+  padding: 9px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rel.snoozed {
+  opacity: 0.6;
+}
+
+.rel-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rel-top .badge {
+  margin-left: auto;
+}
+
+.rel-name,
+.rel-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.rel-name {
+  font-weight: 600;
+  color: #e6edf3;
+}
+
+.rel-name:hover,
+.rel-link:hover {
+  color: var(--accent);
+}
+
+.rel-link {
+  color: var(--text);
+}
+
+.rel-open {
+  color: var(--accent);
+  font-size: 11.5px;
+}
+
+.rel-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 4px;
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.rel-flow .env {
+  color: #3fb950;
+}
+
+.mono {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+}
+
+.stage {
+  margin-left: 4px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 10.5px;
+}
+
+.stage.waiting,
+.stage.failed {
+  color: #e3b341;
+  border-color: #9e6a0366;
+}
+
+.stage.failed {
+  color: #ff7b72;
+  border-color: #f8514955;
+}
+
+.stage.running,
+.stage.queued {
+  color: #79c0ff;
+}
+
+.rel-commits {
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+  border-left: 2px solid #30363d;
+}
+
+.rel-commits li {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 1px 0 1px 10px;
+  font-size: 12px;
+}
+
+.rel-commits .sha {
+  color: var(--accent);
+}
+
+.rel-commits .msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rel-commits .who,
+.rel-commits .more {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.rel-warn {
+  margin-top: 6px;
+  color: #e3b341;
+  font-size: 11.5px;
+}
+
+.rel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.rel-clear,
+.rel-problem {
+  padding: 8px 14px 2px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.rel-clear .ok {
+  color: #3fb950;
+}
+
+.rel-foot {
+  padding: 7px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* Nudges, bottom right, until acted on. */
+.rel-toasts {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rel-toast {
+  width: 340px;
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  border: 1px solid #f8514966;
+  border-left: 3px solid #ff7b72;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px #000b;
+  font-size: 12px;
+}
+
+.rel-toast b {
+  color: #e6edf3;
+}
+
+/* A run of the prod pipeline that built fine but isn't what's live. */
+.prs-run.unreleased {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px #238636;
+}
+
+.prs-commit {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 2px 12px;
+  font-size: 12px;
+}
+
+.prs-commit-msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prs-commit-who {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.prs-sha {
+  color: var(--accent);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+}
+
+.prs-unreleased-actions {
+  display: flex;
+  gap: 6px;
+  padding: 4px 12px 2px;
+}
+
+/* Picker rows carry a release chip and buttons after the name. */
+.row .row-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.row.cursor .row-btn {
+  opacity: 1;
+}
+
+.form-sep {
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}

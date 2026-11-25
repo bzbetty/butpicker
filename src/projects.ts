@@ -45,10 +45,60 @@ export interface PrsConfig {
   open: boolean | null;
 }
 
+/** Release tracking: what's on the default branch but not in prod. */
+export interface ReleasesConfig {
+  /** null is the default: not tracked. */
+  track: boolean | null;
+  /** The Azure DevOps environment that counts as prod; null is `Production`. */
+  environment: string | null;
+  /** Days before a nudge; null is the default (14), 0 never nudges. */
+  nudgeDays: number | null;
+}
+
 export interface ProjectSettings {
   builds: BuildConfig;
   run: RunConfig;
   prs: PrsConfig;
+  releases: ReleasesConfig;
+}
+
+export interface RunRef {
+  id: number;
+  number: string;
+  time: string | null;
+  url: string;
+}
+
+export interface ReleaseCommit {
+  sha: string;
+  message: string;
+  author: string;
+  time: string;
+}
+
+/** Where one tracked project stands against its prod environment. */
+export interface Release {
+  /** The project id: its path. */
+  id: string;
+  name: string;
+  /** `none`: nothing from the default branch has deployed to the environment yet. */
+  state: "level" | "behind" | "none" | "error";
+  environment: string;
+  pipeline: string;
+  pipelineUrl: string;
+  definition: number | null;
+  branch: string;
+  prod: RunRef | null;
+  head: RunRef | null;
+  /** What the newest run is doing about prod. Empty when level. */
+  hold: "" | "waiting" | "running" | "queued" | "failed" | "canceled" | "skipped";
+  canApprove: boolean;
+  /** When the oldest run that isn't in prod was queued. */
+  since: string | null;
+  /** Newest first, merges left out. */
+  commits: ReleaseCommit[];
+  runsBehind: number;
+  error: string | null;
 }
 
 export type CheckState =
@@ -98,6 +148,10 @@ export interface PullRequest {
 }
 
 export interface PipelineRun {
+  /** The provider's run id; Azure's rise with queue order. */
+  id: number;
+  /** Azure's build definition, which release tracking matches on. */
+  definition: number | null;
   /** `waiting` is held at an approval gate: nothing is running. */
   state: CheckState;
   number: string;
@@ -190,6 +244,10 @@ export const worktreeName = (host: RunningAppHost) => worktreeLabel(host.worktre
 
 export const emptyRunConfig = (): RunConfig => ({ mode: null, command: null });
 export const emptyPrsConfig = (): PrsConfig => ({ open: null });
+export const emptyReleasesConfig = (): ReleasesConfig => ({ track: null, environment: null, nudgeDays: null });
+
+/** Every tracked project against its prod environment. `force` skips the few minutes' cache. */
+export const releasesAll = (force: boolean) => invoke<Release[]>("releases_all", { force });
 
 export const listProjects = (root: string) => invoke<Project[]>("projects_list", { root });
 export const projectStatus = (path: string, program: string, ignoreBranches: string[]) =>

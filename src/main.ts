@@ -11,12 +11,14 @@ import {
   detectRun,
   emptyBuildConfig,
   emptyPrsConfig,
+  emptyReleasesConfig,
   emptyRunConfig,
   getSession,
   listProjects,
   matchesSubsequence,
   projectSettingsAll,
   projectStatus,
+  releasesAll,
   saveProjectSettings,
   saveSession,
   type BuildState,
@@ -24,9 +26,23 @@ import {
   type Project,
   type ProjectSettings,
   type ProjectStatus,
+  type Release,
   type RunningAppHost,
   worktreeName,
 } from "./projects";
+import {
+  ageClass,
+  ageText,
+  daysWaiting,
+  DEFAULT_NUDGE_DAYS,
+  lastKnown,
+  needsAttention,
+  releaseChip,
+  remember,
+  renderPanel,
+  showNudge,
+  takeNudges,
+} from "./releases";
 import { getSettings } from "./settings";
 import { ProjectView, type RunSpec } from "./workspace";
 
@@ -87,6 +103,7 @@ async function openProject(project: Project): Promise<void> {
   view.configureRun(runSpecFor(project.id));
   // The pane's answer feeds the tab's PR badge.
   view.prs.onChange = renderTabs;
+  view.prs.setRelease(releaseFor(project.id) ?? null);
   if (projectSettingsFor(project.id).prs.open) view.togglePrs(true);
   void view.refreshWorktrees();
   // Restore activates every tab in turn on the way through; only the one you
@@ -277,7 +294,121 @@ function startStatusPolling(): void {
 // were using, not leave keystrokes going nowhere.
 window.addEventListener("focus", () => {
   void refreshStatuses();
+  void refreshReleases(false);
   if (modalEl.classList.contains("hidden")) currentView()?.active.focus();
+});
+
+/* ---------------------------------------------------------------- releases */
+
+const releasesBtn = document.getElementById("releases-btn") as HTMLButtonElement;
+const releasesPop = document.getElementById("releases-pop") as HTMLDivElement;
+const toastsEl = document.getElementById("toasts") as HTMLDivElement;
+
+/**
+ * Where every tracked project stands against prod, open or not. Starts from
+ * the last answer so the chips are there before the first check returns.
+ */
+let releases: Release[] = lastKnown();
+let releasesCheckedAt: number | null = null;
+let releasesLoading = false;
+
+/** Deployments are slow to change, and each check is a few Azure requests per team project. */
+const RELEASES_POLL_MS = 5 * 60_000;
+
+const releaseFor = (id: string) => releases.find((r) => r.id === id);
+
+const nudgeDaysFor = (id: string) => projectSettingsFor(id).releases.nudgeDays ?? DEFAULT_NUDGE_DAYS;
+
+async function refreshReleases(force: boolean): Promise<void> {
+  if (releasesLoading) return;
+  if (!force && releasesCheckedAt && Date.now() - releasesCheckedAt < RELEASES_POLL_MS) return;
+  if (![...projectSettings.values()].some((s) => s.releases?.track)) {
+    releases = [];
+    remember(releases);
+    applyReleases();
+    return;
+  }
+  releasesLoading = true;
+  renderReleases();
+  try {
+    releases = await releasesAll(force);
+    releasesCheckedAt = Date.now();
+    remember(releases);
+  } catch {
+    // No az, no network: the last answer stands until the next check.
+  } finally {
+    releasesLoading = false;
+  }
+  applyReleases();
+  for (const release of takeNudges(releases, nudgeDaysFor)) {
+    showNudge(toastsEl, release, () => toggleReleases(true));
+  }
+}
+
+/** Hands the answer to everything that shows it. */
+function applyReleases(): void {
+  for (const [id, view] of views) view.prs.setRelease(releaseFor(id) ?? null);
+  renderReleases();
+  renderTabs();
+  redrawPicker?.();
+}
+
+/** The open picker's redraw, so its chips catch up when a check comes back. */
+let redrawPicker: (() => void) | null = null;
+
+/** The tab bar's count of tracked projects behind prod, and the panel if it's open. */
+function renderReleases(): void {
+  releasesBtn.classList.toggle("hidden", releases.length === 0);
+  const waiting = releases.filter(needsAttention);
+  const oldest = Math.max(0, ...waiting.map(daysWaiting));
+  releasesBtn.replaceChildren();
+  if (waiting.length) {
+    releasesBtn.className = `rel-btn ${ageClass(oldest)}`;
+    const sub = document.createElement("span");
+    sub.className = "sub";
+    sub.textContent = ` · oldest ${ageText(oldest)}`;
+    releasesBtn.append(`⇡ ${waiting.length} not in prod`, sub);
+    releasesBtn.title = waiting.map((r) => `${r.name} — waiting ${ageText(daysWaiting(r))}`).join("\n");
+  } else {
+    releasesBtn.className = "rel-btn age-clear";
+    releasesBtn.textContent = "✓ in prod";
+    releasesBtn.title = "Every tracked project is level with prod";
+  }
+  releasesBtn.classList.toggle("on", !releasesPop.classList.contains("hidden"));
+  if (!releasesPop.classList.contains("hidden")) {
+    renderPanel(releasesPop, releases, releasesCheckedAt, releasesLoading, {
+      isOpen: (id) => views.has(id),
+      openProject: (id) => {
+        toggleReleases(false);
+        void openProject(views.get(id)?.project ?? { id, name: folderName(id), path: id });
+      },
+      settings: (id) => {
+        toggleReleases(false);
+        showProjectSettings(id);
+      },
+      refresh: () => void refreshReleases(true),
+      close: () => toggleReleases(false),
+      changed: () => {
+        renderReleases();
+        renderTabs();
+      },
+    });
+  }
+}
+
+function toggleReleases(open = releasesPop.classList.contains("hidden")): void {
+  releasesPop.classList.toggle("hidden", !open);
+  renderReleases();
+  if (open) void refreshReleases(false);
+  else currentView()?.active.focus();
+}
+
+releasesBtn.onclick = () => toggleReleases();
+// A click anywhere else puts the panel away, as a menu would.
+document.addEventListener("pointerdown", (e) => {
+  if (releasesPop.classList.contains("hidden")) return;
+  const target = e.target as Node;
+  if (!releasesPop.contains(target) && !releasesBtn.contains(target)) toggleReleases(false);
 });
 
 /* -------------------------------------------------------------------- tabs */
@@ -426,6 +557,8 @@ function statusBadges(id: string): HTMLElement | null {
   if (prs) wrap.appendChild(prs);
   const build = buildBadge(id);
   if (build) wrap.appendChild(build);
+  const release = releaseChip(releaseFor(id), () => toggleReleases(true));
+  if (release) wrap.appendChild(release);
   return wrap.childElementCount ? wrap : null;
 }
 
@@ -535,12 +668,14 @@ function shiftActiveTab(direction: 1 | -1): void {
 /* ------------------------------------------------------------------- modal */
 
 function closeModal(): void {
+  redrawPicker = null;
   modalEl.classList.add("hidden");
   modalEl.replaceChildren();
   if (activeId) views.get(activeId)?.active.focus();
 }
 
 function openModal(build: (body: HTMLDivElement) => void, title: string): HTMLDivElement {
+  redrawPicker = null;
   modalEl.replaceChildren();
   const sheet = document.createElement("div");
   sheet.className = "sheet";
@@ -622,6 +757,33 @@ async function showProjectPicker(): Promise<void> {
         name.className = "row-name";
         name.textContent = project.name;
         row.appendChild(name);
+
+        // Release tracking is set here as well as in settings, because the
+        // projects it matters most for are the ones that aren't open.
+        const rowButton = (label: string, title: string, onClick: () => void) => {
+          const button = document.createElement("button");
+          button.className = "row-btn";
+          button.textContent = label;
+          button.title = title;
+          button.onclick = (e) => {
+            e.stopPropagation();
+            onClick();
+          };
+          row.appendChild(button);
+        };
+        if (projectSettingsFor(project.id).releases.track) {
+          const chip = releaseChip(releaseFor(project.id), () => {
+            closeModal();
+            toggleReleases(true);
+          });
+          if (chip) row.appendChild(chip);
+        } else {
+          rowButton("Track releases", "Show what's on the default branch but not in prod, open or not", () => {
+            void setTracked(project.id, true).then(() => draw(filter.value));
+            draw(filter.value);
+          });
+        }
+        rowButton("⚙", "Project settings", () => showProjectSettings(project.id));
         list.appendChild(row);
       });
     };
@@ -645,6 +807,7 @@ async function showProjectPicker(): Promise<void> {
       }
     };
     draw("");
+    redrawPicker = () => draw(filter.value);
     setTimeout(() => filter.focus(), 0);
   }, "Open a project");
 }
@@ -666,7 +829,20 @@ function projectSettingsFor(id: string): ProjectSettings {
     // Settings saved before the run pane existed have no `run` at all.
     run: stored?.run ?? emptyRunConfig(),
     prs: stored?.prs ?? emptyPrsConfig(),
+    releases: stored?.releases ?? emptyReleasesConfig(),
   };
+}
+
+/** A project's folder name, for one that isn't open and so has no Project to ask. */
+const folderName = (id: string) => id.split(/[\\/]/).filter(Boolean).pop() ?? id;
+
+/** Turns release tracking on or off for a project, open or not. */
+async function setTracked(id: string, on: boolean): Promise<void> {
+  const current = projectSettingsFor(id);
+  const next: ProjectSettings = { ...current, releases: { ...current.releases, track: on ? true : null } };
+  projectSettings.set(id, next);
+  await saveProjectSettings(id, next).catch(showFatal);
+  await refreshReleases(true);
 }
 
 /** What each open project would run with no command of its own: `aspire run` for an AppHost. */
@@ -693,12 +869,17 @@ function buildSummary(build: BuildStatus | undefined): string {
   return `${build.source} — ${build.pipeline} ${build.number} ${word} ${ago(build.time)}`.trim();
 }
 
+/**
+ * A project's settings, open or not: release tracking is set from the picker
+ * for projects that aren't. A closed project just has less to show about
+ * itself (no build poll, no detected run command).
+ */
 function showProjectSettings(id: string): void {
   const view = views.get(id);
-  if (!view) return;
   const current = projectSettingsFor(id).builds;
   const currentRun = projectSettingsFor(id).run;
   const currentPrs = projectSettingsFor(id).prs;
+  const currentReleases = projectSettingsFor(id).releases;
   const detectedCommand = detectedRun.get(id) ?? null;
   const build = builds.get(id);
   // `org / project / repo` as the poll resolved it, so the override boxes can
@@ -787,12 +968,42 @@ function showProjectSettings(id: string): void {
     field("Repository", "The repository name in Azure DevOps.", repository);
     field("Pipelines", "Definition ids, comma separated. Blank finds them by repository.", definitions);
     field("Branch", "Only report builds of this branch.", branch);
+
+    const releasesHead = document.createElement("div");
+    releasesHead.className = "form-sep";
+    releasesHead.textContent = "Releases";
+    form.appendChild(releasesHead);
+
+    const trackMode = select([
+      ["off", "Off"],
+      ["on", "Show what isn't in prod"],
+    ]);
+    trackMode.value = currentReleases.track ? "on" : "off";
+    const environment = textbox(currentReleases.environment, "Production");
+    const nudge = select([
+      ["", `After ${DEFAULT_NUDGE_DAYS} days`],
+      ["7", "After 7 days"],
+      ["30", "After 30 days"],
+      ["0", "Never"],
+    ]);
+    nudge.value = currentReleases.nudgeDays === null ? "" : String(currentReleases.nudgeDays);
+    field("Track releases", "Watched whether or not the project is open.", trackMode);
+    field("Environment", "The Azure DevOps environment that counts as prod.", environment);
+    field("Nudge", "A notification once the oldest unreleased work is this old.", nudge);
     body.appendChild(form);
 
-    const status = document.createElement("p");
-    status.className = "muted form-note";
-    status.textContent = buildSummary(build);
-    body.appendChild(status);
+    // Only an open project has its build polled.
+    if (view) {
+      const status = document.createElement("p");
+      status.className = "muted form-note";
+      status.textContent = buildSummary(build);
+      body.appendChild(status);
+    }
+
+    const releaseNote = document.createElement("p");
+    releaseNote.className = "muted form-note";
+    releaseNote.textContent = releaseSummary(releaseFor(id), currentReleases.track === true);
+    body.appendChild(releaseNote);
 
     const actions = document.createElement("div");
     actions.className = "sheet-actions end";
@@ -820,18 +1031,30 @@ function showProjectSettings(id: string): void {
         },
         // Closed is the default, so it's stored as no choice at all.
         prs: { open: prsMode.value === "open" ? true : null },
+        // Off and the defaults are stored as no choice at all.
+        releases: {
+          track: trackMode.value === "on" ? true : null,
+          environment: trimmed(environment.value),
+          nudgeDays: nudge.value === "" ? null : Number(nudge.value),
+        },
       };
       projectSettings.set(id, next);
       closeModal();
-      view.configureRun(runSpecFor(id));
-      if (next.prs.open && !currentPrs.open) view.togglePrs(true);
-      if (id === activeId) view.activated();
+      if (view) {
+        view.configureRun(runSpecFor(id));
+        if (next.prs.open && !currentPrs.open) view.togglePrs(true);
+        if (id === activeId) view.activated();
+      }
       // Drop the old answer rather than leaving a badge that the new settings
       // no longer stand behind.
       builds.delete(id);
       lastPolled.delete(id);
       renderTabs();
       await saveProjectSettings(id, next).catch(showFatal);
+      const releasesChanged = JSON.stringify(next.releases) !== JSON.stringify(currentReleases);
+      // The build overrides also say where a project's releases are read from.
+      const coordsChanged = JSON.stringify(next.builds) !== JSON.stringify(current);
+      if (releasesChanged || (next.releases.track && coordsChanged)) await refreshReleases(true);
       await refreshStatuses();
     };
     const cancel = document.createElement("button");
@@ -842,7 +1065,19 @@ function showProjectSettings(id: string): void {
     body.appendChild(actions);
 
     setTimeout(() => runMode.focus(), 0);
-  }, `${view.project.name} settings`);
+  }, `${view?.project.name ?? folderName(id)} settings`);
+}
+
+/** Where the release tracker last left this project, in a sentence. */
+function releaseSummary(release: Release | undefined, tracked: boolean): string {
+  if (!tracked) return "Not tracked. Turn it on to see what's on the default branch but not in prod.";
+  if (!release) return "Not checked yet.";
+  if (release.state === "error" || release.state === "none") return release.error ?? "Release status unavailable.";
+  const prod = `${release.environment} has ${release.prod?.number ?? "?"}`;
+  if (release.state === "level") return `${prod}, level with ${release.branch}.`;
+  const count = release.commits.length || release.runsBehind;
+  const unit = release.commits.length ? "commit" : "run";
+  return `${prod}. ${release.branch} is ${count} ${unit}${count === 1 ? "" : "s"} ahead; the oldest has waited ${ageText(daysWaiting(release))}.`;
 }
 
 /* --------------------------------------------------------------- shortcuts */
@@ -915,7 +1150,9 @@ window.addEventListener(
 );
 
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !modalEl.classList.contains("hidden")) closeModal();
+  if (e.key !== "Escape") return;
+  if (!modalEl.classList.contains("hidden")) closeModal();
+  else if (!releasesPop.classList.contains("hidden")) toggleReleases(false);
 });
 
 window.addEventListener("resize", () => currentView()?.fitAll());
@@ -986,4 +1223,21 @@ async function boot(): Promise<void> {
   void showProjectPicker();
 }
 
-void boot().then(startStatusPolling).catch(showFatal);
+/**
+ * Release tracking polls on its own, tabs or none: the projects it watches are
+ * mostly closed ones. Like the status poll, only while the window has focus.
+ */
+function startReleasePolling(): void {
+  renderReleases();
+  void refreshReleases(false);
+  setInterval(() => {
+    if (document.hasFocus()) void refreshReleases(false);
+  }, 60_000);
+}
+
+void boot()
+  .then(() => {
+    startStatusPolling();
+    startReleasePolling();
+  })
+  .catch(showFatal);

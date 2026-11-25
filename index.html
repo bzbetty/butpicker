@@ -12,6 +12,7 @@
         <div class="tabs" id="tabs"></div>
         <button class="tab-add" id="add-tab" title="Open a project (Ctrl+T)">+</button>
         <div class="tabbar-spacer"></div>
+        <button class="rel-btn hidden" id="releases-btn"></button>
         <div class="hints">
           <kbd>Ctrl+T</kbd> project
           <kbd>Ctrl+Shift+T</kbd> terminal
@@ -28,6 +29,8 @@
       </div>
     </div>
 
+    <div class="rel-pop hidden" id="releases-pop"></div>
+    <div class="rel-toasts" id="toasts"></div>
     <div class="modal hidden" id="modal"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

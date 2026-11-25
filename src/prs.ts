@@ -6,6 +6,7 @@ import {
   type CheckState,
   type PipelineRun,
   type PullRequest,
+  type Release,
   type Reviewer,
 } from "./projects";
 
@@ -128,6 +129,8 @@ export class PrsPanel {
   private applied: string[] = [];
   private ignored: string[] = [];
   private expanded = new Set<number>();
+  /** Where this project stands against prod, when it's tracked. */
+  private release: Release | null = null;
   private loading = false;
   private loadedAt = 0;
   private timer: number | undefined;
@@ -192,6 +195,13 @@ export class PrsPanel {
     if (this.activity) this.render();
   }
 
+  /** The release tracker's answer for this project, or null when it isn't tracked. */
+  setRelease(release: Release | null): void {
+    if (JSON.stringify(release) === JSON.stringify(this.release)) return;
+    this.release = release;
+    if (this.activity) this.render();
+  }
+
   /** Fetches unless the last answer is under a minute old, or `force`. */
   async refresh(force: boolean): Promise<void> {
     if (this.loading) return;
@@ -253,6 +263,7 @@ export class PrsPanel {
       return;
     }
 
+    this.renderUnreleased();
     this.renderPrs(activity);
     this.renderPipelines(activity);
 
@@ -437,6 +448,62 @@ export class PrsPanel {
     return detail;
   }
 
+  /** What's on the default branch but not in prod, above everything else. */
+  private renderUnreleased(): void {
+    const release = this.release;
+    if (!release || release.state !== "behind") return;
+    const head = el("div", "prs-section", `Not in ${release.environment}`);
+    if (release.prod && release.head) {
+      const link = el("button", "prs-link", `${release.prod.number} → ${release.head.number}`);
+      link.title = "Open the newest run";
+      link.onclick = () => void openUrl(release.head!.url);
+      head.append(link);
+    }
+    this.body.append(head);
+
+    // One line each: the pane is narrow, and the PRs below matter too.
+    const shown = 5;
+    for (const commit of release.commits.slice(0, shown)) {
+      const line = el("div", "prs-commit");
+      line.append(el("span", "prs-sha", commit.sha.slice(0, 7)), el("span", "prs-commit-msg", commit.message));
+      line.append(el("span", "prs-commit-who", commit.author.split(/\s+/)[0] ?? ""));
+      line.title = `${commit.sha}\n${commit.author} · ${age(commit.time)}\n${commit.message}`;
+      this.body.append(line);
+    }
+    if (release.commits.length > shown) {
+      this.body.append(el("div", "prs-none", `+${release.commits.length - shown} more`));
+    }
+    if (release.error) this.body.append(el("div", "prs-none prs-warn", release.error));
+
+    if (release.head) {
+      const actions = el("div", "prs-unreleased-actions");
+      const open = el(
+        "button",
+        "prs-btn" + (release.hold === "waiting" ? " primary" : ""),
+        release.hold === "waiting"
+          ? `${release.canApprove ? "Approve" : "Open"} ${release.head.number} ↗`
+          : `Open ${release.head.number} ↗`,
+      );
+      open.title = release.hold === "waiting" ? "Opens the run in Azure DevOps, where the approval is" : "Opens the run";
+      open.onclick = () => void openUrl(release.head!.url);
+      actions.append(open);
+      this.body.append(actions);
+    }
+  }
+
+  /** A default-branch run of the prod pipeline that built fine but isn't what's live. */
+  private unreleased(run: PipelineRun): boolean {
+    const r = this.release;
+    return (
+      !!r?.prod &&
+      r.state === "behind" &&
+      run.definition === r.definition &&
+      run.state === "succeeded" &&
+      run.branch === r.branch &&
+      run.id > r.prod.id
+    );
+  }
+
   private renderPipelines(activity: Activity): void {
     if (activity.pipelines.length === 0) return;
     this.body.append(el("div", "prs-section", activity.provider === "azure" ? "Pipelines" : "Workflows"));
@@ -459,8 +526,16 @@ export class PrsPanel {
   }
 
   private renderRun(run: PipelineRun): HTMLElement {
-    const square = el("button", `prs-run ${run.state}`);
-    square.title = [run.number, runWord(run), run.branch, age(run.time)].filter(Boolean).join(" · ");
+    const unreleased = this.unreleased(run);
+    const square = el("button", `prs-run ${run.state}${unreleased ? " unreleased" : ""}`);
+    square.title = [
+      run.number,
+      unreleased ? `built, not in ${this.release!.environment}` : runWord(run),
+      run.branch,
+      age(run.time),
+    ]
+      .filter(Boolean)
+      .join(" · ");
     square.onclick = () => void openUrl(run.url);
     return square;
   }
