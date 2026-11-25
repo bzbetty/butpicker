@@ -113,6 +113,10 @@ pub struct Pipeline {
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
+    /// The provider's id for the run; Azure's build ids rise with queue order.
+    pub id: u64,
+    /// Azure's build definition, so release tracking can find its pipeline.
+    pub definition: Option<u64>,
     /// As for checks, plus `waiting`: held at an approval gate.
     pub state: String,
     pub number: String,
@@ -547,6 +551,8 @@ async fn azure(cache: &Prs, builds_state: &Builds, coords: Coords, remote: Strin
                         .map(|id| format!("{org_url}/{project}/_build?definitionId={id}"))
                         .unwrap_or_default();
                     let run = Run {
+                        id,
+                        definition: definition.get("id").and_then(Value::as_u64),
                         state: if approvers.is_some() {
                             "waiting"
                         } else {
@@ -792,6 +798,8 @@ async fn github(cache: &Prs, repo: GitHubRepo, remote: String) -> Activity {
                     let file = text(r, "path");
                     let file = file.rsplit('/').next().unwrap_or_default();
                     let run = Run {
+                        id: r.get("id").and_then(Value::as_u64).unwrap_or_default(),
+                        definition: None,
                         state: gh_state(&text(r, "status"), &text(r, "conclusion")).into(),
                         number: r
                             .get("run_number")

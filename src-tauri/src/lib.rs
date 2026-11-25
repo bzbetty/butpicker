@@ -2,6 +2,7 @@ mod builds;
 mod projects;
 mod prs;
 mod pty;
+mod releases;
 mod run;
 mod status;
 
@@ -12,6 +13,7 @@ pub fn run() {
         .manage(pty::PtyManager::default())
         .manage(builds::Builds::default())
         .manage(prs::Prs::default())
+        .manage(releases::Releases::default())
         .invoke_handler(tauri::generate_handler![
             pty::pty_spawn,
             pty::pty_write,
@@ -26,6 +28,7 @@ pub fn run() {
             status::project_status,
             builds::build_status,
             prs::repo_activity,
+            releases::releases_all,
             run::run_detect,
             run::aspire_running,
             run::aspire_stop,

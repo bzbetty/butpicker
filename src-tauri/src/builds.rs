@@ -210,6 +210,26 @@ fn remote_coords(cwd: &Path) -> Option<Coords> {
         .or_else(|| remotes.iter().find_map(|(_, url)| parse_remote(url)))
 }
 
+/// The project's Azure DevOps coordinates: the remote's, with any overrides
+/// from the build settings on top. Overrides fill in whatever the remote didn't
+/// answer, so a repo with an Azure remote but a differently named pipeline
+/// project only needs the one field changed.
+pub(crate) fn resolve_coords(cwd: &Path, config: &BuildConfig) -> Option<Coords> {
+    let trimmed = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let detected = if cwd.is_dir() { remote_coords(cwd) } else { None };
+    Some(Coords {
+        org: trimmed(&config.organization).or_else(|| detected.as_ref().map(|c| c.org.clone()))?,
+        project: trimmed(&config.project).or_else(|| detected.as_ref().map(|c| c.project.clone()))?,
+        repo: trimmed(&config.repository).or_else(|| detected.as_ref().map(|c| c.repo.clone()))?,
+    })
+}
+
 /* -------------------------------------------------------------------- auth */
 
 pub(crate) fn az_token(cache: &Mutex<Cache>) -> Result<String, String> {
@@ -552,33 +572,9 @@ pub async fn build_status(
         }
     }
 
-    let cwd = Path::new(&path);
-    let trimmed = |value: &Option<String>| {
-        value
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(str::to_string)
-    };
-    let detected = if cwd.is_dir() {
-        remote_coords(cwd)
-    } else {
-        None
-    };
-    // Overrides fill in whatever the remote didn't answer, so a repo with an
-    // Azure remote but a differently named pipeline project only needs the one
-    // field changed.
-    let coords = match (
-        trimmed(&config.organization).or_else(|| detected.as_ref().map(|c| c.org.clone())),
-        trimmed(&config.project).or_else(|| detected.as_ref().map(|c| c.project.clone())),
-        trimmed(&config.repository).or_else(|| detected.as_ref().map(|c| c.repo.clone())),
-    ) {
-        (Some(org), Some(project), Some(repo)) => Coords {
-            org,
-            project,
-            repo,
-        },
-        _ => {
+    let coords = match resolve_coords(Path::new(&path), &config) {
+        Some(coords) => coords,
+        None => {
             let status = if config.enabled == Some(true) {
                 BuildStatus::failed("", "no Azure DevOps remote — set organisation, project and repository")
             } else {

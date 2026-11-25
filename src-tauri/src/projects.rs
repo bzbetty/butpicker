@@ -36,6 +36,21 @@ pub struct ProjectSettings {
     pub builds: BuildConfig,
     pub run: RunConfig,
     pub prs: PrsConfig,
+    pub releases: ReleasesConfig,
+}
+
+/// Release tracking: what's on the default branch but not yet in prod. A
+/// tracked project is watched whether or not it's open in a tab.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ReleasesConfig {
+    /// None is the default: not tracked.
+    pub track: Option<bool>,
+    /// The Azure DevOps environment that counts as prod. None is `Production`.
+    pub environment: Option<String>,
+    /// Days the oldest unreleased work may wait before a nudge. None is the
+    /// default (14); 0 never nudges.
+    pub nudge_days: Option<u32>,
 }
 
 /// The PRs & builds pane.
@@ -62,6 +77,15 @@ fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("no config dir: {e}"))?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("session.json"))
+}
+
+/// Every project whose settings turn release tracking on, by id (its path).
+pub(crate) fn tracked_releases(app: &AppHandle) -> Result<Vec<(String, ProjectSettings)>, String> {
+    Ok(load(app)?
+        .projects
+        .into_iter()
+        .filter(|(_, s)| s.releases.track == Some(true))
+        .collect())
 }
 
 fn load(app: &AppHandle) -> Result<Store, String> {
@@ -173,6 +197,8 @@ fn is_default(settings: &ProjectSettings) -> bool {
     builds.enabled.is_none()
         && run.mode.is_none()
         && settings.prs.open.is_none()
+        && settings.releases.track.is_none()
+        && settings.releases.nudge_days.is_none()
         && builds.definitions.is_empty()
         && [
             &builds.organization,
@@ -180,6 +206,7 @@ fn is_default(settings: &ProjectSettings) -> bool {
             &builds.repository,
             &builds.branch,
             &run.command,
+            &settings.releases.environment,
         ]
         .iter()
         .all(|value| value.as_deref().unwrap_or_default().trim().is_empty())
