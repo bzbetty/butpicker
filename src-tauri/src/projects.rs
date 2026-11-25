@@ -79,6 +79,14 @@ fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("session.json"))
 }
 
+/// One project's settings, or the defaults when it has none stored.
+pub(crate) fn settings_for(app: &AppHandle, id: &str) -> ProjectSettings {
+    load(app)
+        .ok()
+        .and_then(|mut store| store.projects.remove(id))
+        .unwrap_or_default()
+}
+
 /// Every project whose settings turn release tracking on, by id (its path).
 pub(crate) fn tracked_releases(app: &AppHandle) -> Result<Vec<(String, ProjectSettings)>, String> {
     Ok(load(app)?

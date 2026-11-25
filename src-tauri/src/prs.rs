@@ -98,7 +98,7 @@ pub struct Check {
     /// Azure's build definition, so a policy with no display name of its own
     /// can borrow its pipeline's.
     #[serde(skip)]
-    definition: Option<u64>,
+    pub(crate) definition: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -168,9 +168,9 @@ struct AzureRepo {
 /* ----------------------------------------------------------------- remotes */
 
 #[derive(Clone, Debug, PartialEq)]
-struct GitHubRepo {
-    owner: String,
-    repo: String,
+pub(crate) struct GitHubRepo {
+    pub(crate) owner: String,
+    pub(crate) repo: String,
 }
 
 enum Remote {
@@ -179,7 +179,7 @@ enum Remote {
 }
 
 /// GitHub remotes in https, scp-style and ssh:// form.
-fn parse_github(raw: &str) -> Option<GitHubRepo> {
+pub(crate) fn parse_github(raw: &str) -> Option<GitHubRepo> {
     let url = raw.trim().trim_end_matches('/');
     let url = url.strip_suffix(".git").unwrap_or(url);
     let path = if let Some(rest) = url.strip_prefix("git@github.com:") {
@@ -260,7 +260,7 @@ fn group_runs(runs: Vec<(String, String, Run)>) -> Vec<Pipeline> {
 }
 
 /// A PR could be completed now: nothing blocking is short of passing.
-fn compute_ready(pr: &Pr) -> bool {
+pub(crate) fn compute_ready(pr: &Pr) -> bool {
     if pr.draft || pr.conflicts {
         return false;
     }
@@ -276,7 +276,7 @@ fn compute_ready(pr: &Pr) -> bool {
 
 /* ------------------------------------------------------------------- azure */
 
-fn azure_vote(vote: i64) -> &'static str {
+pub(crate) fn azure_vote(vote: i64) -> &'static str {
     match vote {
         10 => "approved",
         5 => "suggestions",
@@ -328,7 +328,7 @@ async fn azure_repo(cache: &Prs, coords: &Coords, token: &str) -> Result<AzureRe
     Ok(repo)
 }
 
-async fn azure_me(cache: &Prs, coords: &Coords, token: &str) -> String {
+pub(crate) async fn azure_me(cache: &Prs, coords: &Coords, token: &str) -> String {
     if let Some(id) = cache.inner.lock().ok().and_then(|g| g.me.get(&coords.org).cloned()) {
         return id;
     }
@@ -347,7 +347,7 @@ async fn azure_me(cache: &Prs, coords: &Coords, token: &str) -> String {
 
 /// Branch policy evaluations for one PR: the build validation, reviewer
 /// counts, comment resolution and work item linking, as the PR page shows them.
-async fn azure_checks(org_url: String, project: String, project_id: String, pr: u64, token: String) -> Vec<Check> {
+pub(crate) async fn azure_checks(org_url: String, project: String, project_id: String, pr: u64, token: String) -> Vec<Check> {
     let url = format!(
         "{org_url}/{}/_apis/policy/evaluations?artifactId={}&api-version=7.1-preview.1",
         builds::encode(&project),
@@ -588,7 +588,7 @@ async fn azure(cache: &Prs, builds_state: &Builds, coords: Coords, remote: Strin
 
 /* ------------------------------------------------------------------ github */
 
-fn gh_token(cache: &Prs) -> Result<String, String> {
+pub(crate) fn gh_token(cache: &Prs) -> Result<String, String> {
     if let Some((token, fetched)) = cache.inner.lock().ok().and_then(|g| g.gh_token.clone()) {
         if fetched.elapsed() < TOKEN_TTL {
             return Ok(token);
@@ -611,7 +611,7 @@ fn gh_token(cache: &Prs) -> Result<String, String> {
     Ok(token)
 }
 
-async fn gh_get(url: String, token: String) -> Result<Value, String> {
+pub(crate) async fn gh_get(url: String, token: String) -> Result<Value, String> {
     let response = builds::client()
         .get(&url)
         .bearer_auth(&token)
@@ -632,7 +632,7 @@ async fn gh_get(url: String, token: String) -> Result<Value, String> {
     }
 }
 
-fn gh_state(status: &str, conclusion: &str) -> &'static str {
+pub(crate) fn gh_state(status: &str, conclusion: &str) -> &'static str {
     match status {
         "completed" => match conclusion {
             "success" => "succeeded",
@@ -650,7 +650,7 @@ fn gh_state(status: &str, conclusion: &str) -> &'static str {
 }
 
 /// A PR's reviews and its head commit's check runs.
-async fn gh_pr_detail(api: String, number: u64, sha: String, me: String, token: String) -> (Vec<Reviewer>, Vec<Check>) {
+pub(crate) async fn gh_pr_detail(api: String, number: u64, sha: String, me: String, token: String) -> (Vec<Reviewer>, Vec<Check>) {
     let reviews = gh_get(format!("{api}/pulls/{number}/reviews?per_page=100"), token.clone());
     let runs = gh_get(format!("{api}/commits/{sha}/check-runs?per_page=50"), token);
     let (reviews, runs) = (reviews.await, runs.await);
@@ -835,6 +835,7 @@ async fn github(cache: &Prs, repo: GitHubRepo, remote: String) -> Activity {
 /// is the ⟳ button.
 #[tauri::command]
 pub async fn repo_activity(
+    app: tauri::AppHandle,
     prs: tauri::State<'_, Prs>,
     builds_state: tauri::State<'_, Builds>,
     path: String,
@@ -849,7 +850,20 @@ pub async fn repo_activity(
     }
 
     let cwd = Path::new(&path);
-    let activity = match if cwd.is_dir() { detect(cwd) } else { None } {
+    // The project's Azure DevOps overrides apply here as they do to the build
+    // badge and release tracking: one setting, the same repository everywhere.
+    let config = crate::projects::settings_for(&app, &path).builds;
+    let overridden = [&config.organization, &config.project, &config.repository]
+        .iter()
+        .any(|v| v.as_deref().is_some_and(|s| !s.trim().is_empty()));
+    let source = if overridden {
+        builds::resolve_coords(cwd, &config).map(|c| (Remote::Azure(c), "project settings".to_string()))
+    } else if cwd.is_dir() {
+        detect(cwd)
+    } else {
+        None
+    };
+    let activity = match source {
         Some((Remote::Azure(coords), remote)) => azure(&prs, &builds_state, coords, remote).await,
         Some((Remote::GitHub(repo), remote)) => github(&prs, repo, remote).await,
         None => Activity {

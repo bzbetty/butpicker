@@ -598,6 +598,118 @@ pub async fn build_status(
     Ok(status)
 }
 
+/* --------------------------------------------------------- settings sheet */
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipelineOption {
+    pub id: u64,
+    pub name: String,
+}
+
+/// What the settings sheet offers: where the project's Azure DevOps
+/// coordinates come from, and the pipelines and environments to pick from, so
+/// nobody has to know a definition id or spell an environment exactly.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AzureOptions {
+    /// `Enlighten / Enlighten Internal / Job` as the settings resolve it, or empty.
+    pub source: String,
+    /// What the remote alone says, `[org, project, repo]`, for the override boxes' placeholders.
+    pub detected: Vec<String>,
+    /// The remote it was read from, `origin`; empty when there's no Azure remote.
+    pub remote: String,
+    /// Pipelines that build this repository.
+    pub pipelines: Vec<PipelineOption>,
+    /// Environment names in the team project.
+    pub environments: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn azure_options(builds: tauri::State<'_, Builds>, path: String, config: BuildConfig) -> Result<AzureOptions, String> {
+    let cwd = Path::new(&path);
+    let remotes = if cwd.is_dir() { git_remotes(cwd) } else { Vec::new() };
+    let detected = remotes
+        .iter()
+        .find(|(name, url)| name == "origin" && parse_remote(url).is_some())
+        .or_else(|| remotes.iter().find(|(_, url)| parse_remote(url).is_some()))
+        .and_then(|(name, url)| parse_remote(url).map(|c| (name.clone(), c)));
+
+    let mut options = AzureOptions {
+        detected: detected
+            .as_ref()
+            .map(|(_, c)| vec![c.org.clone(), c.project.clone(), c.repo.clone()])
+            .unwrap_or_default(),
+        remote: detected.as_ref().map(|(name, _)| name.clone()).unwrap_or_default(),
+        ..Default::default()
+    };
+    let Some(coords) = resolve_coords(cwd, &config) else {
+        options.error = Some("No Azure DevOps remote. Set the organisation, project and repository to use one.".into());
+        return Ok(options);
+    };
+    options.source = coords.label();
+
+    let token = match az_token(&builds.inner) {
+        Ok(t) => t,
+        Err(e) => {
+            options.error = Some(e);
+            return Ok(options);
+        }
+    };
+    let project_url = format!("{}/{}", coords.org_url(), encode(&coords.project));
+    let repository = match repo_id(&builds.inner, &coords, &token).await {
+        Ok(id) => id,
+        Err(e) => {
+            options.error = Some(e);
+            return Ok(options);
+        }
+    };
+    let (definitions, environments) = (
+        get_json(
+            &format!("{project_url}/_apis/build/definitions?repositoryId={repository}&repositoryType=TfsGit&api-version=7.1"),
+            &token,
+        )
+        .await,
+        get_json(
+            &format!("{project_url}/_apis/distributedtask/environments?$top=200&api-version=7.1-preview.1"),
+            &token,
+        )
+        .await,
+    );
+    let named = |value: &serde_json::Value| -> Vec<(u64, String)> {
+        value
+            .get("value")
+            .and_then(serde_json::Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|item| {
+                        Some((
+                            item.get("id")?.as_u64()?,
+                            item.get("name")?.as_str()?.to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    match definitions {
+        Ok(v) => {
+            options.pipelines = named(&v)
+                .into_iter()
+                .map(|(id, name)| PipelineOption { id, name })
+                .collect();
+            options.pipelines.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        }
+        Err(e) => options.error = Some(e),
+    }
+    if let Ok(v) = environments {
+        options.environments = named(&v).into_iter().map(|(_, name)| name).collect();
+        options.environments.sort_by_key(|n| n.to_lowercase());
+    }
+    Ok(options)
+}
+
 /* ---------------------------------------------------------------- encoding */
 
 fn decode(segment: &str) -> String {
